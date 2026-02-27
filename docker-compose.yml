@@ -1,0 +1,95 @@
+# =============================================================================
+# Lokal testmiljö för secure-print
+#
+# Startar: PostgreSQL, MinIO (S3), CUPS (med s3print-backend)
+# Kör sedan: bash test/setup.sh   (genererar cert, SoftHSM2-token, S3-bucket)
+# Testa med: bash test/send-job.sh
+# =============================================================================
+
+services:
+
+  # ── PostgreSQL ──────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB:       secure_print
+      POSTGRES_USER:     printuser
+      POSTGRES_PASSWORD: printpass
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./sql/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U printuser -d secure_print"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ── MinIO (S3-kompatibel objektlagring) ─────────────────────────────────────
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER:     minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin123
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # Webb-konsol (http://localhost:9001)
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ── Skapar S3-bucket vid uppstart ───────────────────────────────────────────
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      sh -c "
+        mc alias set local http://minio:9000 minioadmin minioadmin123 &&
+        mc mb --ignore-existing local/secure-print-jobs &&
+        echo 'Bucket secure-print-jobs klar'
+      "
+
+  # ── CUPS med s3print-backend ────────────────────────────────────────────────
+  cups:
+    build:
+      context: ./docker
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    ports:
+      - "631:631"
+    environment:
+      TEST_MODE:        "1"
+      CERT_STORE_PATH:  /etc/cups/test/certs.json
+      S3_ENDPOINT:      http://minio:9000
+      S3_ACCESS_KEY:    minioadmin
+      S3_SECRET_KEY:    minioadmin123
+      S3_BUCKET:        secure-print-jobs
+      DATABASE_URL:     postgresql://printuser:printpass@postgres/secure_print
+      JOB_RETENTION_HOURS: "48"
+    volumes:
+      - ./test/cupsd-local.conf:/etc/cups/cupsd.conf:ro
+      # certs.json genereras av test/setup.sh
+      - ./test/certs.json:/etc/cups/test/certs.json:ro
+    healthcheck:
+      test: ["CMD-SHELL", "lpstat -r 2>/dev/null | grep -q 'scheduler is running'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+volumes:
+  pg-data:
+  minio-data:

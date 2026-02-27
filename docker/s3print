@@ -10,6 +10,10 @@ Kräver miljövariabler:
   LDAP_HOST, LDAP_BIND_DN, LDAP_BIND_PASSWORD, LDAP_BASE_DN
   S3_ENDPOINT, S3_ACCESS_KEY, S3_SECRET_KEY, S3_BUCKET
   DATABASE_URL
+
+Testläge (TEST_MODE=1):
+  CERT_STORE_PATH  – sökväg till JSON-fil: {"upn@domain": "<PEM-cert>"}
+                     Ersätter LDAP-uppslagning. Ingen Kerberos krävs.
 """
 
 import os
@@ -43,9 +47,26 @@ def device_discovery() -> None:
 
 def get_user_certificate(user_upn: str) -> bytes:
     """
-    Hämtar DER-kodat X.509-certifikat för användaren från LDAP/AD.
-    Certifikatet innehåller den publika nyckel vi krypterar med.
+    Hämtar DER-kodat X.509-certifikat för användaren.
+    I testläge (CERT_STORE_PATH satt): läser ur lokal JSON-fil.
+    I produktion: frågar LDAP/AD.
     """
+    # ── Testläge: lokal certifikatfil ──────────────────────────────────────
+    cert_store = os.environ.get("CERT_STORE_PATH")
+    if cert_store:
+        import json
+        store = json.loads(Path(cert_store).read_text())
+        cert_pem = store.get(user_upn)
+        if not cert_pem:
+            raise ValueError(f"[TESTLÄGE] Inget certifikat i {cert_store} för {user_upn}")
+        result = subprocess.run(
+            ["openssl", "x509", "-outform", "DER"],
+            input=cert_pem.encode(), capture_output=True, check=True,
+        )
+        log.info(f"[TESTLÄGE] Certifikat hämtat från {cert_store}")
+        return result.stdout
+
+    # ── Produktion: LDAP/AD ────────────────────────────────────────────────
     import ldap
     import ldap.filter
 

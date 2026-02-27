@@ -15,6 +15,7 @@ mkdir -p /etc/cups/ssl /var/spool/cups /var/log/cups /run/cups
 
 # -----------------------------------------------------------------------------
 # TLS-certifikat från Kubernetes Secret (monterat under /etc/cups/secrets/)
+# I testläge (TEST_MODE=1) genereras ett self-signed cert automatiskt
 # -----------------------------------------------------------------------------
 if [ -f /etc/cups/secrets/server.crt ]; then
     log "Installerar TLS-certifikat..."
@@ -22,30 +23,47 @@ if [ -f /etc/cups/secrets/server.crt ]; then
     cp /etc/cups/secrets/server.key /etc/cups/ssl/server.key
     chmod 640 /etc/cups/ssl/server.key
     chown root:lp /etc/cups/ssl/server.key
+elif [ "${TEST_MODE:-0}" = "1" ]; then
+    log "TEST_MODE: genererar self-signed TLS-certifikat..."
+    openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
+        -keyout /etc/cups/ssl/server.key \
+        -out    /etc/cups/ssl/server.crt \
+        -subj   "/CN=localhost" \
+        -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" \
+        2>/dev/null
+    chmod 640 /etc/cups/ssl/server.key
+    chown root:lp /etc/cups/ssl/server.key
 else
     err "TLS-certifikat saknas: /etc/cups/secrets/server.crt"
 fi
 
 # -----------------------------------------------------------------------------
-# Kerberos keytab
+# Kerberos keytab (hoppas över i testläge)
 # -----------------------------------------------------------------------------
 if [ -f /etc/cups/secrets/cups.keytab ]; then
     log "Installerar Kerberos keytab..."
     cp /etc/cups/secrets/cups.keytab /etc/cups/cups.keytab
     chmod 640 /etc/cups/cups.keytab
     chown root:lp /etc/cups/cups.keytab
+elif [ "${TEST_MODE:-0}" = "1" ]; then
+    log "TEST_MODE: Kerberos keytab hoppas över"
 else
     err "Kerberos keytab saknas: /etc/cups/secrets/cups.keytab"
 fi
 
 # -----------------------------------------------------------------------------
 # Verifiera att miljövariabler finns
+# I testläge krävs inte LDAP-variabler (ersätts av CERT_STORE_PATH)
 # -----------------------------------------------------------------------------
-required_vars=(
-    LDAP_HOST LDAP_BIND_DN LDAP_BIND_PASSWORD LDAP_BASE_DN
-    S3_ENDPOINT S3_ACCESS_KEY S3_SECRET_KEY S3_BUCKET
-    DATABASE_URL
-)
+if [ "${TEST_MODE:-0}" = "1" ]; then
+    required_vars=(S3_ENDPOINT S3_ACCESS_KEY S3_SECRET_KEY S3_BUCKET DATABASE_URL)
+else
+    required_vars=(
+        LDAP_HOST LDAP_BIND_DN LDAP_BIND_PASSWORD LDAP_BASE_DN
+        S3_ENDPOINT S3_ACCESS_KEY S3_SECRET_KEY S3_BUCKET
+        DATABASE_URL
+    )
+fi
 for var in "${required_vars[@]}"; do
     if [ -z "${!var:-}" ]; then
         err "Miljövariabel saknas: $var"
