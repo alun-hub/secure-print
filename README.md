@@ -6,6 +6,9 @@ submission host — the print server stores only ciphertext and never has access
 to the plaintext document. Jobs are released exclusively at the physical printer
 by the intended recipient using their PIN-protected smartcard.
 
+![Pin]("/pics/pin.png")
+![Main GUI]("/pics/main-gui.png")
+
 ---
 
 ## Architecture overview
