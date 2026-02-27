@@ -1,19 +1,40 @@
-# Secure Print
+# Project Title
 
-## Security Model
+## Overview
+
+This is a sample project demonstrating the use of sequence diagrams.
+
+## Features
+- Feature 1
+- Feature 2
+
+## Sequence Diagram
 
 ```mermaid
 sequenceDiagram
     participant User
-    participant Printer
-    participant Auth Server
-
-    User->>Auth Server: Request authentication
-    Auth Server-->>User: Provide authentication token
-    User->>Printer: Send print job with token
-    Printer->>Auth Server: Validate token
-    Auth Server-->>Printer: Token valid
-    Printer->>User: Print job confirmation
+    participant Service
+    User->>Service: Request
+    Service-->>User: Response
 ```
 
-This README.md file describes the secure print process in detail.
+## Installation
+
+1. Clone the repository.
+2. Install dependencies.
+
+## Usage
+
+Run the project using the following command:
+
+```
+run your_project
+```
+
+## Contributing
+
+Please submit a PR for any contributions you may want to make.
+
+## License
+
+This project is licensed under the MIT License.
