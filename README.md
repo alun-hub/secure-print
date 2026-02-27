@@ -1,17 +1,12 @@
-# Project Title
-
-Description of the project.
+# Title
+Content
 
 ## Sequence Diagram
-
 ```mermaid
 sequenceDiagram
-    participant A as Alice
-    participant B as Bob
-    A->>B: Hello Bob, how are you?
-    B->>A: I am good thanks!
+    participant Alice
+    participant Bob
+    Alice->>Bob: Hello Bob, how are you?
+    Bob->>Alice: I am good thanks!
 ```
-
-## Another Section
-
-Additional information goes here.
+You can add more information here.
