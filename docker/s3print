@@ -88,9 +88,23 @@ def get_user_certificate(user_upn: str) -> bytes:
     bind_pw = os.environ["LDAP_BIND_PASSWORD"]
     base_dn = os.environ["LDAP_BASE_DN"]
 
-    conn = ldap.initialize(f"ldap://{host}")
+    # Använd LDAPS om host inte redan innehåller schema.
+    # Sätt LDAP_HOST=ldaps://ldap.company.com eller bara ldap.company.com (då väljs ldaps://).
+    ldap_url = host if "://" in host else f"ldaps://{host}"
+    if ldap_url.startswith("ldap://"):
+        log.warning("LDAP: Ansluter med okrypterat ldap:// – byt till ldaps:// i LDAP_HOST")
+
+    conn = ldap.initialize(ldap_url)
     conn.set_option(ldap.OPT_REFERRALS, 0)
     conn.set_option(ldap.OPT_NETWORK_TIMEOUT, 10)
+
+    # TLS-certifikatverifiering (kräver att serverns cert är utfärdat av betrodd CA)
+    cacert = os.environ.get("LDAP_TLS_CACERT")
+    if cacert:
+        conn.set_option(ldap.OPT_X_TLS_CACERTFILE, cacert)
+    conn.set_option(ldap.OPT_X_TLS_REQUIRE_CERT, ldap.OPT_X_TLS_DEMAND)
+    conn.set_option(ldap.OPT_X_TLS_NEWCTX, 0)  # Tillämpa TLS-kontexten
+
     conn.simple_bind_s(bind_dn, bind_pw)
 
     try:

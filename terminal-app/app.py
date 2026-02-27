@@ -12,6 +12,8 @@ Flöde:
   4. Skrivs ut på lokal skrivare
 """
 
+import base64
+import hashlib
 import json
 import os
 import re
@@ -22,6 +24,7 @@ import threading
 import time
 import logging
 import secrets
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -31,6 +34,8 @@ import psycopg2.extras
 import pkcs11
 import pkcs11.util.rsa
 from cryptography import x509
+from cryptography.fernet import Fernet
+from cryptography.x509 import load_der_x509_crl
 from flask import Flask, jsonify, render_template, request, session
 from botocore.config import Config
 
@@ -44,7 +49,12 @@ S3_SECRET_KEY   = os.environ["S3_SECRET_KEY"]
 S3_BUCKET       = os.environ["S3_BUCKET"]
 LOCAL_PRINTER   = os.environ.get("LOCAL_PRINTER", "default")
 TERMINAL_ID     = os.environ.get("TERMINAL_ID", "terminal-unknown")
-PKCS11_LIB      = os.environ.get("PKCS11_LIB", "/usr/lib/x86_64-linux-gnu/opensc-pkcs11.so")
+PKCS11_LIB         = os.environ.get("PKCS11_LIB", "/usr/lib/x86_64-linux-gnu/opensc-pkcs11.so")
+
+# Revokationskontroll: "ocsp" (standard), "strict" (fel om status okänd), "none" (inaktivt)
+REVOCATION_CHECK   = os.environ.get("REVOCATION_CHECK", "ocsp")
+REVOCATION_CA_FILE = os.environ.get("REVOCATION_CA_FILE", "/etc/ssl/certs/ca-certificates.crt")
+REVOCATION_TIMEOUT = int(os.environ.get("REVOCATION_TIMEOUT", "10"))
 
 # ---------------------------------------------------------------------------
 # Hjälpfunktioner för utskriftsinställningar
@@ -110,6 +120,16 @@ app.secret_key = secrets.token_bytes(32)
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["PERMANENT_SESSION_LIFETIME"] = 300       # 5 minuter
 app.config["SESSION_REFRESH_EACH_REQUEST"] = True    # förläng session vid varje anrop
+
+# ---------------------------------------------------------------------------
+# Sessionskryptering – PIN lagras aldrig i klartext i cookie-payloaden
+# ---------------------------------------------------------------------------
+
+def _session_cipher() -> Fernet:
+    """Deriverar en Fernet-nyckel ur appens secret_key för att kryptera PIN."""
+    key = hashlib.sha256(app.secret_key + b":pin-enc-v1").digest()
+    return Fernet(base64.urlsafe_b64encode(key))
+
 
 # ---------------------------------------------------------------------------
 # Smartkortsövervakning (bakgrundstråd)
@@ -210,6 +230,7 @@ def authenticate_card(pin: str) -> tuple[str, str]:
         ).stdout.decode()
 
         upn = _extract_upn(cert_pem)
+        check_revocation(cert_pem)
         log.info(f"Inloggad: {upn}")
         return cert_pem, upn
 
@@ -249,6 +270,156 @@ def decrypt_job(encrypted_data: bytes, cert_pem: str, pin: str) -> bytes:
         )
 
         return out_file.read_bytes()
+
+
+# ---------------------------------------------------------------------------
+# Revokationskontroll (OCSP/CRL)
+# ---------------------------------------------------------------------------
+
+def _fetch_url(url: str) -> bytes:
+    """Hämtar URL med User-Agent och timeout."""
+    req = urllib.request.Request(url, headers={"User-Agent": "SecurePrint/1.0"})
+    with urllib.request.urlopen(req, timeout=REVOCATION_TIMEOUT) as resp:
+        return resp.read()
+
+
+def _get_aia_url(cert, oid) -> str:
+    """Returnerar URL av given typ ur certifikatets AIA-extension, eller None."""
+    try:
+        aia = cert.extensions.get_extension_for_class(x509.AuthorityInformationAccess)
+        for desc in aia.value:
+            if desc.access_method == oid:
+                return desc.access_location.value
+    except x509.ExtensionNotFound:
+        pass
+    return None
+
+
+def _check_ocsp(cert_pem: str, cert) -> None:
+    """OCSP-kontroll via openssl. Laddar ner utfärdarens certifikat från AIA."""
+    ocsp_url = _get_aia_url(cert, x509.AuthorityInformationAccessOID.OCSP)
+    if not ocsp_url:
+        raise ValueError("Ingen OCSP-URL i certifikatets AIA-extension")
+
+    issuer_url = _get_aia_url(cert, x509.AuthorityInformationAccessOID.CA_ISSUERS)
+
+    with tempfile.TemporaryDirectory(prefix="secprint_ocsp_") as tmp:
+        tmp_path    = Path(tmp)
+        cert_file   = tmp_path / "user.pem"
+        issuer_file = tmp_path / "issuer.pem"
+        cert_file.write_text(cert_pem)
+
+        # Hämta utfärdarens certifikat (behövs för att bygga OCSP-förfrågan)
+        if issuer_url:
+            try:
+                issuer_data = _fetch_url(issuer_url)
+                # Konvertera DER → PEM vid behov
+                if not issuer_data.startswith(b"-----"):
+                    issuer_data = subprocess.run(
+                        ["openssl", "x509", "-inform", "DER"],
+                        input=issuer_data, capture_output=True, check=True,
+                    ).stdout
+                issuer_file.write_bytes(issuer_data)
+            except Exception as exc:
+                log.warning(f"REVOCATION: Kunde inte hämta utfärdarens cert från {issuer_url}: {exc}")
+
+        cmd = [
+            "openssl", "ocsp",
+            "-cert",    str(cert_file),
+            "-url",     ocsp_url,
+            "-timeout", str(REVOCATION_TIMEOUT),
+            "-CAfile",  REVOCATION_CA_FILE,
+        ]
+        if issuer_file.exists():
+            cmd += ["-issuer", str(issuer_file)]
+        else:
+            # Utan utfärdarens cert går det inte att verifiera OCSP-signatur
+            cmd += ["-noverify"]
+            log.warning("REVOCATION: OCSP utan utfärdarens certifikat – responssignatur verifieras ej")
+
+        result = subprocess.run(cmd, capture_output=True, timeout=REVOCATION_TIMEOUT + 5)
+        output = (result.stdout + result.stderr).decode(errors="replace")
+        log.debug(f"REVOCATION: openssl ocsp output: {output[:400]!r}")
+
+        if ": good" in output:
+            log.info(f"REVOCATION: OCSP OK  serial={cert.serial_number:X}")
+        elif ": revoked" in output:
+            raise ValueError("Certifikatet är återkallat")
+        else:
+            raise ValueError(f"OCSP-svar otolkat: {output[:150].strip()!r}")
+
+
+def _check_crl(cert) -> None:
+    """CRL-kontroll via cryptography-biblioteket."""
+    try:
+        cdp = cert.extensions.get_extension_for_class(x509.CRLDistributionPoints)
+    except x509.ExtensionNotFound:
+        raise ValueError("Ingen CRL-distributionspunkt i certifikatet")
+
+    last_exc = ValueError("Inga nåbara CRL-distributionspunkter")
+    for dp in cdp.value:
+        for gn in dp.full_name or []:
+            if not isinstance(gn, x509.UniformResourceIdentifier):
+                continue
+            crl_url = gn.value
+            if not crl_url.startswith("http"):
+                continue
+            try:
+                crl_data = _fetch_url(crl_url)
+                crl = load_der_x509_crl(crl_data)
+                rev = crl.get_revoked_certificate_by_serial_number(cert.serial_number)
+                if rev:
+                    raise ValueError("Certifikatet är återkallat (CRL)")
+                log.info(f"REVOCATION: CRL OK  serial={cert.serial_number:X}")
+                return
+            except ValueError:
+                raise
+            except Exception as exc:
+                last_exc = exc
+                log.warning(f"REVOCATION: CRL {crl_url} misslyckades: {exc}")
+    raise last_exc
+
+
+def check_revocation(cert_pem: str) -> None:
+    """
+    Kontrollerar att certifikatet inte är återkallat (OCSP → CRL-fallback).
+
+    REVOCATION_CHECK=ocsp    – OCSP med CRL-fallback; mjukt fel vid nätverksproblem
+    REVOCATION_CHECK=strict  – som ocsp, men hårt fel om status ej kan fastställas
+    REVOCATION_CHECK=none    – inaktivt (inte rekommenderat i produktion)
+    """
+    if REVOCATION_CHECK == "none":
+        log.warning("REVOCATION: Revokationskontroll inaktiverad (REVOCATION_CHECK=none)")
+        return
+
+    cert = x509.load_pem_x509_certificate(cert_pem.encode())
+
+    # Försök OCSP
+    try:
+        _check_ocsp(cert_pem, cert)
+        return
+    except ValueError as exc:
+        if "återkallat" in str(exc):
+            raise                                  # Explicit revokation → propagera alltid
+        log.warning(f"REVOCATION: OCSP ej avgörande ({exc}), provar CRL…")
+    except Exception as exc:
+        log.warning(f"REVOCATION: OCSP-fel ({exc}), provar CRL…")
+
+    # Fallback CRL
+    try:
+        _check_crl(cert)
+        return
+    except ValueError as exc:
+        if "återkallat" in str(exc):
+            raise
+        log.warning(f"REVOCATION: CRL ej avgörande: {exc}")
+    except Exception as exc:
+        log.warning(f"REVOCATION: CRL-fel: {exc}")
+
+    # Varken OCSP eller CRL nåddes
+    if REVOCATION_CHECK == "strict":
+        raise ValueError("Revokationsstatus kunde inte fastställas (REVOCATION_CHECK=strict)")
+    log.warning("REVOCATION: Varken OCSP eller CRL nåddes – inloggning tillåts (mjukt läge)")
 
 
 # ---------------------------------------------------------------------------
@@ -363,10 +534,10 @@ def api_login():
 
     try:
         cert_pem, upn = authenticate_card(pin)
-        session.permanent   = True
-        session["upn"]      = upn
-        session["pin"]      = pin
-        session["cert_pem"] = cert_pem
+        session.permanent    = True
+        session["upn"]       = upn
+        session["pin_enc"]   = _session_cipher().encrypt(pin.encode()).decode()
+        session["cert_pem"]  = cert_pem
         log.info(f"AUDIT login_ok upn={upn} terminal={TERMINAL_ID}")
         return jsonify({"upn": upn})
     except ValueError as exc:
@@ -405,7 +576,7 @@ def api_print(job_id: str):
         return jsonify({"error": "Ej inloggad"}), 401
 
     upn      = session["upn"]
-    pin      = session["pin"]
+    pin      = _session_cipher().decrypt(session["pin_enc"].encode()).decode()
     cert_pem = session["cert_pem"]
 
     # Hämta jobbet från PostgreSQL för att verifiera ägarskap + s3_key
