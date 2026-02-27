@@ -73,6 +73,39 @@ by the intended recipient using their PIN-protected smartcard.
 
 ## Security model
 
+sequenceDiagram
+
+participant User
+participant PC
+participant CUPS
+participant s3print
+participant AD as Active Directory (LDAP)
+participant S3
+participant DB
+participant Terminal
+participant Card as Smartcard (PKCS#11)
+participant Printer
+
+User->>PC: Print document
+PC->>CUPS: IPPS (TLS) + Kerberos ticket
+CUPS->>s3print: Job + options (argv[5])
+
+s3print->>AD: Fetch userCertificate
+s3print->>s3print: Encrypt (CMS AES-256-CBC)
+s3print->>S3: Upload ciphertext
+s3print->>DB: Insert metadata (status=pending)
+
+User->>Terminal: Insert smartcard
+Terminal->>Card: PIN authentication
+Card-->>Terminal: Auth OK
+
+Terminal->>DB: Fetch pending jobs
+Terminal->>S3: Download ciphertext
+Terminal->>Card: Decrypt (private key stays on card)
+Card-->>Terminal: Plaintext
+Terminal->>Printer: lpr with preserved options
+Terminal->>DB: status=retrieved
+
 ### Threat mitigations
 
 | Threat | Mitigation |
