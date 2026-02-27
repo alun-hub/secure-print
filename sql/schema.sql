@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS print_jobs (
     -- Jobbmetadata
     title           VARCHAR(500)                NOT NULL DEFAULT '',
     copies          INTEGER                     NOT NULL DEFAULT 1,
+    options         TEXT                        NOT NULL DEFAULT '{}',
 
     -- Lagring
     s3_key          VARCHAR(1000)               NOT NULL,
@@ -49,7 +50,7 @@ BEGIN
     RETURN QUERY
         UPDATE print_jobs
         SET    status = 'expired'
-        WHERE  status = 'pending'
+        WHERE  status IN ('pending', 'cancelled')
           AND  expires_at < NOW()
         RETURNING print_jobs.s3_key;
 END;
@@ -58,12 +59,15 @@ $$ LANGUAGE plpgsql;
 -- =============================================================================
 -- View: aktiva jobb per användare (används av tunna terminalen)
 -- =============================================================================
+-- ALTER TABLE print_jobs ADD COLUMN options TEXT NOT NULL DEFAULT '{}';
+
 CREATE OR REPLACE VIEW pending_jobs AS
     SELECT
         id,
         user_upn,
         title,
         copies,
+        options,
         s3_key,
         encrypted_size,
         submitted_at,

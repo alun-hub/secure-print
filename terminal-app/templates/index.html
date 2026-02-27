@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Säker utskrift</title>
   <style>
-    /* ── Reset och grundstil ── */
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     body {
@@ -28,87 +27,105 @@
     p  { font-size: 1.1rem; color: #aaa; }
 
     /* ── Kortikon ── */
-    .card-icon {
-      font-size: 5rem;
-      animation: pulse 2s ease-in-out infinite;
-    }
+    .card-icon { font-size: 5rem; animation: pulse 2s ease-in-out infinite; }
     @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
 
     /* ── PIN-knappsats ── */
     .pin-display {
-      font-size: 2.5rem;
-      letter-spacing: 0.8rem;
-      height: 3rem;
-      color: #fff;
+      font-size: 2.5rem; letter-spacing: 0.8rem; height: 3rem; color: #fff;
     }
-
     .numpad {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 0.75rem;
-      width: 280px;
+      display: grid; grid-template-columns: repeat(3, 1fr);
+      gap: 0.75rem; width: 280px;
     }
-
     .numpad button {
-      background: #2a2a4a;
-      border: 2px solid #3a3a6a;
-      border-radius: 12px;
-      color: #fff;
-      font-size: 1.8rem;
-      padding: 1rem;
-      cursor: pointer;
-      transition: background 0.1s, transform 0.1s;
+      background: #2a2a4a; border: 2px solid #3a3a6a; border-radius: 12px;
+      color: #fff; font-size: 1.8rem; padding: 1rem; cursor: pointer;
+      transition: background 0.1s, transform 0.1s, opacity 0.15s;
     }
-    .numpad button:active { background: #4a4a8a; transform: scale(0.95); }
-    .numpad .btn-clear { color: #f87171; }
-    .numpad .btn-ok    { background: #1d6f42; border-color: #27a05f; color: #fff; }
+    .numpad button:active  { background: #4a4a8a; transform: scale(0.95); }
+    .numpad .btn-clear     { color: #f87171; }
+    .numpad .btn-ok        { background: #1d6f42; border-color: #27a05f; color: #fff; }
     .numpad .btn-ok:active { background: #27a05f; }
+    .numpad .btn-ok.disabled { opacity: 0.35; pointer-events: none; }
 
-    /* ── Jobblista ── */
+    /* ── Användarhuvud ── */
     .user-header {
       display: flex; align-items: center; gap: 1rem;
-      background: #2a2a4a; border-radius: 12px; padding: 1rem 1.5rem;
-      width: 100%;
+      background: #2a2a4a; border-radius: 12px; padding: 1rem 1.5rem; width: 100%;
     }
     .user-avatar {
-      width: 48px; height: 48px; border-radius: 50%;
-      background: #4a4a8a; display: flex; align-items: center; justify-content: center;
-      font-size: 1.5rem;
+      width: 48px; height: 48px; border-radius: 50%; background: #4a4a8a;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1.5rem; flex-shrink: 0;
     }
-    .user-name { font-size: 1.1rem; font-weight: 600; text-align: left; }
-    .user-upn  { font-size: 0.85rem; color: #888; }
+    .user-info    { flex: 1; text-align: left; }
+    .user-name    { font-size: 1.1rem; font-weight: 600; }
+    .user-upn     { font-size: 0.85rem; color: #888; }
+    .user-printer { font-size: 0.8rem; color: #666; margin-top: 0.15rem; }
 
-    .jobs-list { width: 100%; display: flex; flex-direction: column; gap: 0.75rem; }
+    /* ── Session-timeout-varning ── */
+    .session-warning {
+      display: none; background: #3a2a0a; border: 1px solid #a06010;
+      border-radius: 8px; padding: 0.6rem 1rem; color: #f0a030;
+      font-size: 0.9rem; width: 100%; text-align: center;
+    }
+    .session-warning.visible { display: block; }
+
+    /* ── Jobblista ── */
+    .jobs-list {
+      width: 100%; display: flex; flex-direction: column;
+      gap: 0.75rem; max-height: 55vh; overflow-y: auto;
+    }
+    .btn-print-all {
+      width: 100%; background: #1d4a6f; border: none; color: #fff;
+      border-radius: 10px; padding: 0.75rem; font-size: 1rem;
+      cursor: pointer; transition: background 0.1s;
+    }
+    .btn-print-all:active   { background: #2a6fa0; }
+    .btn-print-all:disabled { opacity: 0.5; cursor: default; }
 
     .job-card {
-      background: #2a2a4a;
-      border: 1px solid #3a3a6a;
-      border-radius: 12px;
-      padding: 1rem 1.25rem;
-      display: flex;
-      align-items: center;
-      gap: 1rem;
-      text-align: left;
+      background: #2a2a4a; border: 1px solid #3a3a6a; border-radius: 12px;
+      padding: 1rem 1.25rem; display: flex; align-items: center;
+      gap: 1rem; text-align: left;
     }
-    .job-icon { font-size: 2rem; }
-    .job-info { flex: 1; }
-    .job-title { font-size: 1rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
-    .job-meta  { font-size: 0.8rem; color: #888; margin-top: 0.2rem; }
+    .job-card.expiring-soon     { border-color: #a06010; }
+    .job-card.expiring-critical { border-color: #8b0000; }
 
-    .job-actions { display: flex; gap: 0.5rem; }
+    .job-icon  { font-size: 2rem; flex-shrink: 0; }
+    .job-info  { flex: 1; min-width: 0; }
+    .job-title {
+      font-size: 1rem; font-weight: 600; cursor: pointer;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .job-title.expanded { white-space: normal; overflow: visible; text-overflow: unset; word-break: break-word; }
+    .job-meta   { font-size: 0.8rem; color: #888; margin-top: 0.2rem; }
+    .job-expiry { font-size: 0.75rem; margin-top: 0.15rem; }
+    .job-expiry.warn     { color: #f0a030; }
+    .job-expiry.critical { color: #f87171; }
 
-    .btn-print  { background: #1d6f42; border: none; color: #fff; border-radius: 8px; padding: 0.6rem 1rem; font-size: 0.95rem; cursor: pointer; }
-    .btn-cancel { background: transparent; border: 1px solid #555; color: #aaa; border-radius: 8px; padding: 0.6rem 0.8rem; font-size: 0.95rem; cursor: pointer; }
-    .btn-print:active  { background: #27a05f; }
-    .btn-cancel:active { background: #333; }
+    .job-actions          { display: flex; gap: 0.5rem; flex-shrink: 0; }
+    .job-actions.hidden   { display: none; }
+    .job-confirm          { display: none; flex-direction: column; gap: 0.4rem; flex-shrink: 0; align-items: flex-end; }
+    .job-confirm.visible  { display: flex; }
+    .job-confirm-label    { font-size: 0.8rem; color: #aaa; }
+    .job-confirm-btns     { display: flex; gap: 0.4rem; }
+
+    .btn-print       { background: #1d6f42; border: none; color: #fff; border-radius: 8px; padding: 0.6rem 1rem; font-size: 0.95rem; cursor: pointer; }
+    .btn-cancel      { background: transparent; border: 1px solid #555; color: #aaa; border-radius: 8px; padding: 0.6rem 0.8rem; font-size: 0.95rem; cursor: pointer; }
+    .btn-confirm-yes { background: #8b0000; border: none; color: #fff; border-radius: 8px; padding: 0.5rem 0.8rem; font-size: 0.85rem; cursor: pointer; }
+    .btn-confirm-no  { background: #2a2a4a; border: 1px solid #555; color: #ccc; border-radius: 8px; padding: 0.5rem 0.8rem; font-size: 0.85rem; cursor: pointer; }
+    .btn-print:active       { background: #27a05f; }
+    .btn-cancel:active      { background: #333; }
+    .btn-confirm-yes:active { background: #c00; }
+    .btn-confirm-no:active  { background: #3a3a6a; }
+    .btn-status { background: #2a2a4a; border: 1px solid #444; color: #aaa; border-radius: 8px; padding: 0.6rem 0.8rem; font-size: 0.85rem; cursor: default; }
 
     .no-jobs { color: #888; font-size: 1.1rem; padding: 2rem; }
 
     /* ── Utskrift pågår ── */
-    .progress-ring {
-      font-size: 4rem;
-      animation: spin 1.5s linear infinite;
-    }
+    .progress-ring { font-size: 4rem; animation: spin 1.5s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
 
     /* ── Framgång ── */
@@ -117,30 +134,17 @@
 
     /* ── Fel ── */
     .error-msg {
-      background: #3a1a1a;
-      border: 1px solid #8b0000;
-      border-radius: 8px;
-      padding: 1rem;
-      color: #f87171;
-      font-size: 1rem;
+      background: #3a1a1a; border: 1px solid #8b0000;
+      border-radius: 8px; padding: 1rem; color: #f87171; font-size: 1rem;
     }
 
-    /* ── Knappar ── */
-    .btn {
-      background: #3a3a6a;
-      border: none; border-radius: 10px;
-      color: #fff; cursor: pointer;
-      font-size: 1rem; padding: 0.8rem 2rem;
-      transition: background 0.1s;
-    }
+    /* ── Övriga knappar ── */
+    .btn        { background: #3a3a6a; border: none; border-radius: 10px; color: #fff; cursor: pointer; font-size: 1rem; padding: 0.8rem 2rem; transition: background 0.1s; }
     .btn:active { background: #5a5a9a; }
     .btn-logout { background: transparent; border: 1px solid #555; color: #888; }
 
     /* ── Sidfot ── */
-    footer {
-      position: fixed; bottom: 1rem;
-      color: #444; font-size: 0.75rem;
-    }
+    footer { position: fixed; bottom: 1rem; color: #444; font-size: 0.75rem; }
   </style>
 </head>
 <body>
@@ -168,7 +172,7 @@
       <button onclick="pinKey('9')">9</button>
       <button class="btn-clear" onclick="pinClear()">⌫</button>
       <button onclick="pinKey('0')">0</button>
-      <button class="btn-ok" onclick="pinSubmit()">OK</button>
+      <button class="btn-ok disabled" id="btn-ok" onclick="pinSubmit()">OK</button>
     </div>
     <div id="pin-error" class="error-msg" style="display:none"></div>
   </div>
@@ -177,11 +181,13 @@
   <div id="sec-jobs" class="section">
     <div class="user-header">
       <div class="user-avatar">👤</div>
-      <div>
+      <div class="user-info">
         <div class="user-name" id="user-display-name"></div>
         <div class="user-upn"  id="user-upn"></div>
+        <div class="user-printer">🖨 {{ printer }}</div>
       </div>
     </div>
+    <div id="session-warning" class="session-warning"></div>
     <div class="jobs-list" id="jobs-list">
       <div class="no-jobs">Laddar utskrifter...</div>
     </div>
@@ -213,52 +219,114 @@
   <footer>Terminal: {{ terminal_id }}</footer>
 
 <script>
-  // ── State ──────────────────────────────────────────────────
-  let pin         = "";
-  let currentUpn  = null;
-  let lastCard    = false;
-  let lastAuth    = false;
+  "use strict";
 
-  // ── Visa/dölj sektioner ────────────────────────────────────
+  // ── State ──────────────────────────────────────────────────
+  let pin          = "";
+  let currentUpn   = null;
+  let lastCard     = false;
+  let lastAuth     = false;
+  let lastActivity = 0;
+  let batchRunning = false;
+
+  let jobsRefreshTimer  = null;
+  let sessionCheckTimer = null;
+
+  const INACTIVITY_MS = 5 * 60 * 1000;   // 5 min utan interaktion → utloggning
+  const WARN_AT_MS    = 60 * 1000;        // visa varning sista minuten
+
+  // ── Visa sektion ───────────────────────────────────────────
   function show(id) {
     document.querySelectorAll(".section").forEach(s => s.classList.remove("active"));
     document.getElementById(id).classList.add("active");
+    if (id === "sec-jobs") startJobsRefresh();
+    else                   stopJobsRefresh();
+  }
+
+  // ── Aktivitetsspårning ─────────────────────────────────────
+  function touch() { lastActivity = Date.now(); }
+
+  // ── Inaktivitets-räknare ───────────────────────────────────
+  function startSessionTimer() {
+    lastActivity = Date.now();
+    clearInterval(sessionCheckTimer);
+    sessionCheckTimer = setInterval(() => {
+      if (!currentUpn) return;
+      const idle      = Date.now() - lastActivity;
+      const remaining = INACTIVITY_MS - idle;
+      const el        = document.getElementById("session-warning");
+      if (remaining <= 0) {
+        logout();
+      } else if (remaining <= WARN_AT_MS) {
+        const secs = Math.ceil(remaining / 1000);
+        el.textContent = `Session avslutas om ${secs} s på grund av inaktivitet`;
+        el.classList.add("visible");
+      } else {
+        el.classList.remove("visible");
+      }
+    }, 1000);
+  }
+
+  function stopSessionTimer() {
+    clearInterval(sessionCheckTimer);
+    sessionCheckTimer = null;
+    document.getElementById("session-warning")?.classList.remove("visible");
+  }
+
+  // ── Auto-uppdatering av jobblistan ─────────────────────────
+  function startJobsRefresh() {
+    stopJobsRefresh();
+    jobsRefreshTimer = setInterval(() => {
+      const active      = document.querySelector(".section.active")?.id;
+      const confirmOpen = !!document.querySelector(".job-confirm.visible");
+      if (active === "sec-jobs" && !batchRunning && !confirmOpen) loadJobs();
+    }, 30000);
+  }
+
+  function stopJobsRefresh() {
+    clearInterval(jobsRefreshTimer);
+    jobsRefreshTimer = null;
   }
 
   // ── PIN-hantering ──────────────────────────────────────────
   function updatePinDisplay() {
     document.getElementById("pin-dots").textContent = "●".repeat(pin.length) || " ";
+    const ok = document.getElementById("btn-ok");
+    if (pin.length >= 4) ok.classList.remove("disabled");
+    else                 ok.classList.add("disabled");
   }
 
   function pinKey(d) {
+    touch();
     if (pin.length >= 12) return;
     pin += d;
     updatePinDisplay();
   }
 
   function pinClear() {
+    touch();
     pin = pin.slice(0, -1);
     updatePinDisplay();
   }
 
   async function pinSubmit() {
     if (pin.length < 4) return;
+    touch();
     document.getElementById("pin-error").style.display = "none";
-    document.getElementById("numpad").style.opacity = "0.5";
-    document.getElementById("numpad").style.pointerEvents = "none";
-
+    document.getElementById("numpad").style.opacity        = "0.5";
+    document.getElementById("numpad").style.pointerEvents  = "none";
     try {
-      const r = await fetch("/api/login", {
-        method: "POST",
+      const r    = await fetch("/api/login", {
+        method:  "POST",
         headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({pin}),
+        body:    JSON.stringify({pin}),
       });
       const data = await r.json();
-
       if (r.ok) {
         currentUpn = data.upn;
         pin = "";
         updatePinDisplay();
+        startSessionTimer();
         showJobs();
       } else {
         pin = "";
@@ -268,7 +336,7 @@
         el.style.display = "block";
       }
     } finally {
-      document.getElementById("numpad").style.opacity  = "1";
+      document.getElementById("numpad").style.opacity       = "1";
       document.getElementById("numpad").style.pointerEvents = "auto";
     }
   }
@@ -276,43 +344,150 @@
   // ── Jobblista ──────────────────────────────────────────────
   async function showJobs() {
     show("sec-jobs");
-    const upnParts = currentUpn ? currentUpn.split("@") : ["", ""];
-    document.getElementById("user-display-name").textContent = upnParts[0];
+    const parts = currentUpn ? currentUpn.split("@") : ["", ""];
+    document.getElementById("user-display-name").textContent = parts[0];
     document.getElementById("user-upn").textContent          = currentUpn || "";
+    await loadJobs();
+  }
 
-    const list = document.getElementById("jobs-list");
-    list.innerHTML = '<div class="no-jobs">Laddar utskrifter...</div>';
+  // Bygger ett jobkort med säkra DOM-metoder (inga user-data i onclick-attribut)
+  function buildJobCard(j) {
+    const card = document.createElement("div");
+    card.id    = `job-${j.id}`;
+    card.dataset.jobId = j.id;
 
-    const r    = await fetch("/api/jobs");
+    if (j.expires_in_minutes <= 60)       card.className = "job-card expiring-critical";
+    else if (j.expires_in_minutes <= 120) card.className = "job-card expiring-soon";
+    else                                  card.className = "job-card";
+
+    // Ikon
+    const icon = document.createElement("div");
+    icon.className   = "job-icon";
+    icon.textContent = "📄";
+
+    // Info-kolumn
+    const info  = document.createElement("div");
+    info.className = "job-info";
+
+    const titleEl = document.createElement("div");
+    titleEl.className   = "job-title";
+    titleEl.textContent = j.title;
+    titleEl.addEventListener("click", () => { touch(); titleEl.classList.toggle("expanded"); });
+
+    const copies   = j.copies === 1 ? "1 kopia" : `${j.copies} kopior`;
+    const metaParts = [copies];
+    if (j.options_summary) metaParts.push(j.options_summary);
+    metaParts.push(`${j.size_kb} KB`);
+    metaParts.push(j.submitted_at);
+
+    const meta = document.createElement("div");
+    meta.className   = "job-meta";
+    meta.textContent = metaParts.join("  ·  ");
+
+    info.appendChild(titleEl);
+    info.appendChild(meta);
+
+    if (j.expires_in_minutes <= 120) {
+      const expiry = document.createElement("div");
+      expiry.className = j.expires_in_minutes <= 60 ? "job-expiry critical" : "job-expiry warn";
+      expiry.textContent = j.expires_in_minutes <= 60
+        ? `⚠ Upphör om ${j.expires_in_minutes} min`
+        : `Upphör om ${Math.round(j.expires_in_minutes / 60)} h`;
+      info.appendChild(expiry);
+    }
+
+    // Åtgärdsknappar
+    const actions = document.createElement("div");
+    actions.className = "job-actions";
+    actions.id        = `actions-${j.id}`;
+
+    const btnPrint = document.createElement("button");
+    btnPrint.className   = "btn-print";
+    btnPrint.textContent = "Skriv ut";
+    btnPrint.addEventListener("click", () => { touch(); printJob(j.id, j.title); });
+
+    const btnCancel = document.createElement("button");
+    btnCancel.className   = "btn-cancel";
+    btnCancel.textContent = "✕";
+    btnCancel.addEventListener("click", () => { touch(); confirmCancel(j.id); });
+
+    actions.appendChild(btnPrint);
+    actions.appendChild(btnCancel);
+
+    // Bekräftelsepanel
+    const confirm = document.createElement("div");
+    confirm.className = "job-confirm";
+    confirm.id        = `confirm-${j.id}`;
+
+    const confirmLabel = document.createElement("div");
+    confirmLabel.className   = "job-confirm-label";
+    confirmLabel.textContent = "Avboka jobbet?";
+
+    const confirmBtns = document.createElement("div");
+    confirmBtns.className = "job-confirm-btns";
+
+    const btnYes = document.createElement("button");
+    btnYes.className   = "btn-confirm-yes";
+    btnYes.textContent = "Ja, avboka";
+    btnYes.addEventListener("click", () => { touch(); doCancel(j.id); });
+
+    const btnNo = document.createElement("button");
+    btnNo.className   = "btn-confirm-no";
+    btnNo.textContent = "Behåll";
+    btnNo.addEventListener("click", () => { touch(); abortCancel(j.id); });
+
+    confirmBtns.appendChild(btnYes);
+    confirmBtns.appendChild(btnNo);
+    confirm.appendChild(confirmLabel);
+    confirm.appendChild(confirmBtns);
+
+    card.appendChild(icon);
+    card.appendChild(info);
+    card.appendChild(actions);
+    card.appendChild(confirm);
+    return card;
+  }
+
+  async function loadJobs() {
+    const list     = document.getElementById("jobs-list");
+    const hadCards = list.querySelector(".job-card") !== null;
+    if (!hadCards) {
+      list.textContent = "";
+      const loading = document.createElement("div");
+      loading.className   = "no-jobs";
+      loading.textContent = "Laddar utskrifter...";
+      list.appendChild(loading);
+    }
+
+    const r = await fetch("/api/jobs");
+    if (!r.ok) return;  // poll() hanterar sessionsutgång
     const jobs = await r.json();
 
+    list.textContent = "";  // rensa
+
     if (!jobs.length) {
-      list.innerHTML = '<div class="no-jobs">Inga väntande utskrifter</div>';
+      const empty = document.createElement("div");
+      empty.className   = "no-jobs";
+      empty.textContent = "Inga väntande utskrifter";
+      list.appendChild(empty);
       return;
     }
 
-    list.innerHTML = jobs.map(j => `
-      <div class="job-card" id="job-${j.id}">
-        <div class="job-icon">📄</div>
-        <div class="job-info">
-          <div class="job-title" title="${esc(j.title)}">${esc(j.title)}</div>
-          <div class="job-meta">${j.copies} kopia/or &nbsp;·&nbsp; ${j.size_kb} KB &nbsp;·&nbsp; ${j.submitted_at}</div>
-        </div>
-        <div class="job-actions">
-          <button class="btn-print"  onclick="printJob('${j.id}','${esc(j.title)}')">Skriv ut</button>
-          <button class="btn-cancel" onclick="cancelJob('${j.id}')">✕</button>
-        </div>
-      </div>
-    `).join("");
+    if (jobs.length > 1) {
+      const btn = document.createElement("button");
+      btn.className   = "btn-print-all";
+      btn.id          = "btn-print-all";
+      btn.textContent = `Skriv ut alla (${jobs.length})`;
+      btn.addEventListener("click", () => { touch(); printAll(); });
+      list.appendChild(btn);
+    }
+
+    jobs.forEach(j => list.appendChild(buildJobCard(j)));
   }
 
-  function esc(s) {
-    return String(s).replace(/[&<>"']/g, c =>
-      ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-  }
-
-  // ── Skriv ut ───────────────────────────────────────────────
+  // ── Skriv ut ett jobb ──────────────────────────────────────
   async function printJob(id, title) {
+    touch();
     show("sec-printing");
     document.getElementById("printing-title").textContent = title;
 
@@ -322,26 +497,101 @@
     if (r.ok) {
       show("sec-done");
       document.getElementById("done-title").textContent = title;
-      // Automatisk återgång till jobblistan efter 3 sekunder
       setTimeout(showJobs, 3000);
     } else {
       show("sec-error");
-      document.getElementById("error-detail").textContent = data.error;
+      document.getElementById("error-detail").textContent = friendlyError(data.error);
     }
   }
 
-  // ── Avbryt jobb ────────────────────────────────────────────
-  async function cancelJob(id) {
-    await fetch(`/api/cancel/${id}`, {method: "POST"});
-    document.getElementById(`job-${id}`)?.remove();
-    if (!document.querySelector(".job-card")) {
-      document.getElementById("jobs-list").innerHTML =
-        '<div class="no-jobs">Inga väntande utskrifter</div>';
+  function friendlyError(msg) {
+    if (!msg) return "Okänt fel – försök igen.";
+    if (msg.includes("skrivaren"))
+      return "Skrivaren svarar inte. Kontrollera att den är påslagen och har papper.";
+    if (msg.includes("Oväntat"))
+      return "Ett oväntat fel uppstod. Försök igen eller kontakta IT-support.";
+    return msg;
+  }
+
+  // ── Skriv ut alla jobb ─────────────────────────────────────
+  async function printAll() {
+    touch();
+    batchRunning = true;
+    const btn   = document.getElementById("btn-print-all");
+    const cards = [...document.querySelectorAll(".job-card")];
+    if (btn) btn.disabled = true;
+
+    for (let i = 0; i < cards.length; i++) {
+      const card    = cards[i];
+      const id      = card.dataset.jobId;
+      const title   = card.querySelector(".job-title")?.textContent || "";
+      const actions = document.getElementById(`actions-${id}`);
+
+      if (btn) btn.textContent = `Skriver ut ${i + 1} av ${cards.length}…`;
+      if (actions) {
+        actions.textContent = "";
+        const status = document.createElement("span");
+        status.className   = "btn-status";
+        status.textContent = "⏳ Skriver ut…";
+        actions.appendChild(status);
+      }
+
+      const r    = await fetch(`/api/print/${id}`, {method: "POST"});
+      const data = await r.json();
+
+      if (r.ok) {
+        card.style.opacity = "0.4";
+        if (actions) {
+          actions.textContent = "";
+          const status = document.createElement("span");
+          status.className   = "btn-status";
+          status.textContent = "✓ Klar";
+          actions.appendChild(status);
+        }
+      } else if (r.status === 404) {
+        card.style.opacity = "0.4";
+        if (actions) {
+          actions.textContent = "";
+          const status = document.createElement("span");
+          status.className   = "btn-status";
+          status.textContent = "Ej tillgängligt";
+          actions.appendChild(status);
+        }
+      } else {
+        batchRunning = false;
+        show("sec-error");
+        document.getElementById("error-detail").textContent = friendlyError(data.error);
+        return;
+      }
     }
+
+    batchRunning = false;
+    show("sec-done");
+    document.getElementById("done-title").textContent =
+      cards.length === 1 ? "1 jobb utskrivet" : `${cards.length} jobb utskrivna`;
+    setTimeout(showJobs, 3000);
+  }
+
+  // ── Avboka med bekräftelse ─────────────────────────────────
+  function confirmCancel(id) {
+    document.getElementById(`actions-${id}`)?.classList.add("hidden");
+    document.getElementById(`confirm-${id}`)?.classList.add("visible");
+  }
+
+  function abortCancel(id) {
+    document.getElementById(`actions-${id}`)?.classList.remove("hidden");
+    document.getElementById(`confirm-${id}`)?.classList.remove("visible");
+  }
+
+  async function doCancel(id) {
+    await fetch(`/api/cancel/${id}`, {method: "POST"});
+    await loadJobs();
   }
 
   // ── Logga ut ───────────────────────────────────────────────
   async function logout() {
+    stopSessionTimer();
+    stopJobsRefresh();
     await fetch("/api/logout", {method: "POST"});
     currentUpn = null;
     pin = "";
@@ -349,21 +599,26 @@
     show("sec-wait");
   }
 
-  // ── Polling: kortläge och autentisering ───────────────────
+  // ── Polling: kortläge + server-session ────────────────────
   async function poll() {
     try {
       const r    = await fetch("/api/status");
       const data = await r.json();
 
-      // Kort borttaget → tillbaka till startsida
       if (lastAuth && !data.card_present) {
+        stopSessionTimer();
+        stopJobsRefresh();
         currentUpn = null;
         show("sec-wait");
-      }
-      // Kort isatt → visa PIN om ej inloggad
-      else if (data.card_present && !data.authenticated) {
-        const current = document.querySelector(".section.active")?.id;
-        if (current === "sec-wait") {
+      } else if (lastAuth && !data.authenticated) {
+        // Server-session utgången
+        stopSessionTimer();
+        stopJobsRefresh();
+        currentUpn = null;
+        show("sec-wait");
+      } else if (data.card_present && !data.authenticated) {
+        const active = document.querySelector(".section.active")?.id;
+        if (active === "sec-wait") {
           pin = "";
           updatePinDisplay();
           document.getElementById("pin-error").style.display = "none";
@@ -378,7 +633,6 @@
     }
   }
 
-  // Starta polling var 1.5:e sekund
   setInterval(poll, 1500);
   poll();
 </script>

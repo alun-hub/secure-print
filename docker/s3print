@@ -16,6 +16,7 @@ Testläge (TEST_MODE=1):
                      Ersätter LDAP-uppslagning. Ingen Kerberos krävs.
 """
 
+import json
 import os
 import sys
 import subprocess
@@ -37,6 +38,19 @@ log = logging.getLogger("s3print")
 # Device discovery (CUPS kallar backend utan argument för att lista enheter)
 # ---------------------------------------------------------------------------
 
+def parse_cups_options(options_str: str) -> dict:
+    """Parsar CUPS options-strängen (argv[5]) till en dict."""
+    opts = {}
+    for part in options_str.split():
+        if '=' in part:
+            k, v = part.split('=', 1)
+            opts[k] = v
+        elif part:
+            opts[part] = 'true'
+    opts.pop('copies', None)
+    return opts
+
+
 def device_discovery() -> None:
     print('network s3print:// "S3 Secure Print" "Krypterad säker utskrift via S3"')
 
@@ -54,7 +68,6 @@ def get_user_certificate(user_upn: str) -> bytes:
     # ── Testläge: lokal certifikatfil ──────────────────────────────────────
     cert_store = os.environ.get("CERT_STORE_PATH")
     if cert_store:
-        import json
         store = json.loads(Path(cert_store).read_text())
         cert_pem = store.get(user_upn)
         if not cert_pem:
@@ -137,7 +150,6 @@ def encrypt_job(job_data: bytes, cert_der: bytes) -> bytes:
         )
 
         encrypted = encrypted_file.read_bytes()
-        log.info(f"Krypterat: {len(job_data)} → {len(encrypted)} bytes")
         return encrypted
 
 
@@ -188,6 +200,7 @@ def register_in_db(
     user_upn: str,
     title: str,
     copies: int,
+    options: str,
     s3_key: str,
     encrypted_size: int,
 ) -> None:
@@ -202,15 +215,15 @@ def register_in_db(
             cur.execute(
                 """
                 INSERT INTO print_jobs (
-                    id, cups_job_id, user_upn, title, copies,
+                    id, cups_job_id, user_upn, title, copies, options,
                     s3_key, encrypted_size, submitted_at, expires_at, status
                 ) VALUES (
-                    %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s,
                     %s, %s, %s, %s, 'pending'
                 )
                 """,
                 (
-                    job_uuid, cups_job_id, user_upn, title, copies,
+                    job_uuid, cups_job_id, user_upn, title, copies, options,
                     s3_key, encrypted_size,
                     datetime.now(timezone.utc), expires_at,
                 ),
@@ -235,14 +248,14 @@ def main() -> int:
         log.error(f"Fel antal argument: {len(sys.argv) - 1} (förväntar 5–6)")
         return 2
 
-    cups_job_id = int(sys.argv[1])
-    user_upn    = sys.argv[2]
-    title       = sys.argv[3]
-    copies      = int(sys.argv[4])
-    # sys.argv[5] = options (används ej)
-    job_file    = sys.argv[6] if len(sys.argv) > 6 else None
+    cups_job_id  = int(sys.argv[1])
+    user_upn     = sys.argv[2]
+    title        = sys.argv[3]
+    copies       = int(sys.argv[4])
+    options_dict = parse_cups_options(sys.argv[5])
+    job_file     = sys.argv[6] if len(sys.argv) > 6 else None
 
-    log.info(f"Tar emot jobb {cups_job_id} från '{user_upn}': {title!r} ({copies} kopia/or)")
+    log.info(f"Tar emot jobb {cups_job_id} från '{user_upn}': {title!r} ({copies} kopia/or, options={options_dict})")
 
     # Läs jobbdata
     if job_file:
@@ -264,14 +277,17 @@ def main() -> int:
         job_uuid = str(uuid.uuid4())
         s3_key   = f"jobs/{user_upn}/{job_uuid}.cms"
 
+        log.info(f"Krypterat {len(job_data)} → {len(encrypted_data)} bytes för {user_upn} (job={job_uuid})")
+
         # 4. Ladda upp till S3
         upload_to_s3(encrypted_data, s3_key)
+        log.info(f"AUDIT job_submitted upn={user_upn} job_id={job_uuid} title={title!r} copies={copies} size={len(encrypted_data)}")
 
         # 5. Registrera i PostgreSQL (vid fel: rulla tillbaka S3)
         try:
             register_in_db(
                 job_uuid, cups_job_id, user_upn, title,
-                copies, s3_key, len(encrypted_data),
+                copies, json.dumps(options_dict), s3_key, len(encrypted_data),
             )
         except Exception as db_exc:
             log.error(f"Databasfel: {db_exc}")

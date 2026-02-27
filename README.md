@@ -1,62 +1,290 @@
 # Secure Print
 
 End-to-end encrypted pull printing system built on standard components.
-Print jobs are encrypted with the recipient's public key before storage —
-even the print server cannot read the content. Jobs are only decrypted
-at the physical printer using the user's smartcard.
+Print jobs are encrypted with the recipient's public key before leaving the
+submission host — the print server stores only ciphertext and never has access
+to the plaintext document. Jobs are released exclusively at the physical printer
+by the intended recipient using their PIN-protected smartcard.
+
+---
+
+## Architecture overview
 
 ```
-Client (Linux/Windows)
-       │
-       │  IPPS + Kerberos (TLS 1.2+)
-       ▼
-┌─────────────────────────────┐
-│  CUPS  (OpenShift / K8s)    │  ← receives job, authenticates via AD
-│  s3print backend            │  ← encrypts + stores, never spools locally
-└────────┬────────────────────┘
-         │  AES-256-CBC (CMS envelope, RSA/EC public key)
+  PC / Workstation
+  (Windows, Linux, macOS)
+         │
+         │  IPPS (IPP over TLS 1.2+)
+         │  HTTP Negotiate / Kerberos – identity proven by AD ticket
          ▼
-┌────────────────┐    ┌──────────────────────┐
-│  S3 / MinIO    │    │  PostgreSQL           │
-│  job.cms files │    │  job metadata + index │
-└────────┬───────┘    └──────────┬────────────┘
-         │                       │
-         └──────────┬────────────┘
-                    │  Flask API (localhost only)
-                    ▼
-        ┌───────────────────────┐
-        │  Thin terminal        │  ← Chromium kiosk, touch screen
-        │  Flask + PKCS#11      │  ← decrypts with smartcard private key
-        └──────────┬────────────┘
-                   │  lpr (IPP)
-                   ▼
-            [ Local printer ]
+┌──────────────────────────────────────────────────┐
+│  CUPS  (OpenShift / Kubernetes pod)              │
+│                                                  │
+│  ┌─────────────────────────────────────────────┐ │
+│  │  s3print backend  (docker/s3print)          │ │
+│  │                                             │ │
+│  │  1. Read job from stdin (PS/PDF)            │ │
+│  │  2. Fetch user cert from AD/LDAP            │ │
+│  │  3. Encrypt: openssl cms -aes-256-cbc       │ │
+│  │  4. Upload ciphertext → S3                  │ │
+│  │  5. Insert metadata → PostgreSQL            │ │
+│  │  6. Exit 0  (CUPS spool stays empty)        │ │
+│  └─────────────────────────────────────────────┘ │
+└────────────┬─────────────────────────────────────┘
+             │
+             ├──────── AES-256-CBC (CMS envelope) ────────────┐
+             │                                                 │
+             ▼                                                 ▼
+  ┌─────────────────────┐                       ┌─────────────────────────┐
+  │  S3 / MinIO         │                       │  PostgreSQL             │
+  │                     │                       │                         │
+  │  jobs/<upn>/<uuid>  │                       │  print_jobs             │
+  │  .cms               │                       │  (metadata + status)    │
+  └──────────┬──────────┘                       └────────────┬────────────┘
+             │                                               │
+             └─────────────────────┬─────────────────────────┘
+                                   │
+                                   │  Flask REST API (127.0.0.1:5000 only)
+                                   ▼
+                       ┌───────────────────────────┐
+                       │  Thin terminal            │
+                       │                           │
+                       │  Chromium kiosk (touch)   │
+                       │  Flask + PKCS#11          │
+                       │                           │
+                       │  1. Card detected         │
+                       │  2. PIN entered           │
+                       │  3. UPN extracted         │
+                       │  4. Jobs listed           │
+                       │  5. Decrypt (on-card)     │
+                       │  6. lpr → local printer   │
+                       └───────────────────────────┘
+                                   │
+                                   │  lpr (IPP), with preserved
+                                   │  duplex/paper/colour options
+                                   ▼
+                            [ Local printer ]
 ```
+
+---
 
 ## Security model
 
+### Threat mitigations
+
 | Threat | Mitigation |
 |--------|-----------|
-| Eavesdropping on print submission | IPPS (IPP over TLS 1.2+), Kerberos ticket proves identity |
-| Unauthorised job retrieval | Job encrypted with recipient's public key; ciphertext useless without smartcard |
-| Impersonating another user at terminal | PIN-protected smartcard; private key never leaves the card (PKCS#11) |
-| Server compromise | Server only holds ciphertext; private key is on the user's card |
-| Forgotten job left in queue | Configurable expiry (default 48 h); CronJob purges S3 + DB |
-| Stolen smartcard | PIN required for every decryption operation |
+| Eavesdropping on job submission | IPPS (IPP over TLS 1.2+) for all client–server traffic |
+| Identity spoofing at submission | Kerberos (HTTP Negotiate); the AD ticket cryptographically binds the job to the user's UPN — no password sent |
+| Unauthorised job retrieval | Job encrypted with recipient's X.509 public key; ciphertext is useless without the private key on the smartcard |
+| Server compromise | Server stores only ciphertext and metadata; private key never leaves the smartcard |
+| Impersonating another user at terminal | PIN-protected PKCS#11 session; wrong PIN or locked card → authentication fails immediately |
+| Private key extraction | PKCS#11 decryption runs inside the smartcard; the key never enters host memory |
+| Forgotten job left in queue | Configurable retention (default 48 h); hourly CronJob marks expired rows and deletes S3 objects |
+| Cancelled job data lingering in S3 | Cancelled jobs are also purged by the hourly CronJob (same expiry logic) |
+| Stolen smartcard | PIN required; repeated wrong PINs lock the card |
+| Session left open at terminal | Client-side inactivity timer (5 min) auto-logs out; card removal immediately clears session |
+| Command injection via print options | Option keys and values validated with strict regex before passing to `lpr`; subprocess list (not shell) prevents injection regardless |
+| XSS in terminal UI | All user-controlled data inserted via DOM `textContent` / `dataset`; no user data in `innerHTML` or `onclick` attributes |
+| Job metadata exposure | Terminal API returns only `options_summary` (human-readable string), never the raw options JSON |
 
-## Components
+### Encryption details
 
-| Component | Technology | Purpose |
+```
+Algorithm:   CMS (PKCS#7 / RFC 5652) enveloped-data
+Symmetric:   AES-256-CBC  (data encryption key)
+Asymmetric:  RSA or EC    (encrypts the AES key for the recipient)
+Tool:        openssl cms -encrypt -aes-256-cbc -recip <cert.pem>
+
+Decryption:  openssl cms -decrypt -engine pkcs11 -inkey pkcs11:type=private
+             The PKCS#11 engine performs RSA/EC unwrap inside the smartcard.
+             Plaintext data is written to a tmpfs tmpdir and never touches disk.
+```
+
+### Network exposure
+
+| Component | Listens on | Protocol |
 |-----------|-----------|---------|
-| Print spooler | CUPS + IPPS | Receives jobs over encrypted IPP; authenticates via Kerberos |
-| Kerberos auth | Active Directory / MIT KDC | Binds submitted job to the user's UPN without passwords on the wire |
-| Encryption backend | `docker/s3print` (Python) | CUPS custom backend; encrypts each job with the user's X.509 public key |
-| Certificate source | LDAP / AD (`userCertificate`) | Backend fetches the recipient's DER certificate at submission time |
-| Job store | S3 / MinIO | Holds encrypted CMS blobs; keys are `jobs/<upn>/<uuid>.cms` |
-| Job index | PostgreSQL | Stores metadata (UPN, title, S3 key, status, expiry) |
-| Terminal UI | Flask + Chromium kiosk | Touch-friendly web UI running locally on the thin terminal |
-| Smartcard runtime | OpenSC + PKCS#11 | PIN verification and private-key decryption without key extraction |
-| Job cleanup | Kubernetes CronJob | Hourly: marks expired rows, deletes corresponding S3 objects |
+| CUPS (OpenShift) | `0.0.0.0:631` (via Route) | IPPS (TLS 1.2+) |
+| Flask terminal app | `127.0.0.1:5000` | HTTP (loopback only) |
+| PostgreSQL | internal cluster / VPN | TCP (TLS recommended) |
+| S3 / MinIO | internal cluster / VPN | HTTPS |
+
+The Flask API is never exposed to the network — Chromium connects to localhost only.
+
+---
+
+## Print options preservation
+
+Print settings selected by the user (duplex, paper size, colour mode, n-up, etc.)
+travel through the entire pipeline and are applied at the physical printer.
+
+```
+PC                        CUPS backend (s3print)          Terminal (app.py)
+──────────────────────────────────────────────────────────────────────────
+lpr -o sides=two-sided    argv[5] parsed by               build_lpr_cmd() reads
+    -o media=A4            parse_cups_options()            options from DB and
+    -o print-color-mode=                                   constructs:
+       monochrome          {"sides": "two-sided-…",        lpr -P printer -# 2
+                            "media": "A4",                     -o sides=two-sided-…
+                            "print-color-mode":                -o media=A4
+                              "monochrome"}                    -o print-color-mode=
+                                                                  monochrome
+                           Stored as JSON in
+                           print_jobs.options
+```
+
+**Option validation** in `build_lpr_cmd()`:
+- Keys: `^[a-zA-Z0-9_\-]+$`
+- Values: `^[a-zA-Z0-9_\-\./: ]+$`
+- `copies` key is stripped (handled separately by `-#`)
+- Passed as a subprocess list — shell injection is architecturally impossible
+
+**UI display**: `summarize_options()` converts raw option values to readable text
+(e.g. `"Dubbelsidig · A4 · Svartvitt"`) shown on each job card in the terminal.
+
+---
+
+## Audit logging
+
+All security-relevant events are written to the system journal
+(`journalctl -u secure-print-terminal`) with a structured `AUDIT` prefix
+for easy filtering.
+
+### Terminal events
+
+| Event | Log message |
+|-------|------------|
+| Login success | `AUDIT login_ok upn=… terminal=…` |
+| Login failure | `AUDIT login_fail terminal=… reason=…` |
+| Job printed | `AUDIT print_ok upn=… job_id=… title=… terminal=…` |
+| Print failure | `AUDIT print_fail upn=… job_id=… terminal=… error=…` |
+| Job cancelled | `AUDIT cancel upn=… job_id=… terminal=…` |
+| Logout | `AUDIT logout upn=… terminal=…` |
+| Unauthorised API call | `AUDIT unauthorized endpoint=… terminal=…` |
+
+### CUPS backend events
+
+| Event | Log message |
+|-------|------------|
+| Job received | `Tar emot jobb … från 'upn': title (copies, options=…)` |
+| Job stored | `AUDIT job_submitted upn=… job_id=… title=… copies=… size=…` |
+| DB rollback | `Databasfel: …` + S3 object deleted |
+
+### Database audit trail
+
+Every job carries a full lifecycle in `print_jobs`:
+
+```
+submitted_at  → when the job was spooled
+status        → pending | retrieved | cancelled | expired
+retrieved_at  → when the terminal released it
+retrieved_by  → which terminal (TERMINAL_ID)
+```
+
+Filter example:
+```sql
+-- All jobs printed in the last 7 days, by whom and on which terminal
+SELECT user_upn, title, copies, retrieved_at, retrieved_by
+FROM   print_jobs
+WHERE  status = 'retrieved'
+  AND  retrieved_at > NOW() - INTERVAL '7 days'
+ORDER  BY retrieved_at DESC;
+```
+
+---
+
+## Detailed flows
+
+### Job submission
+
+```
+1. User prints from any application (Word, LibreOffice, lpr, …)
+
+2. OS sends the job via IPPS to spooler.company.com:631
+     Windows 10/11: built-in IPP Everywhere – no client driver needed
+     Linux: lpadmin -p secure-print \
+                    -v ipps://spooler.company.com:631/printers/s3-queue -E
+
+3. CUPS authenticates via Kerberos (HTTP Negotiate)
+   The job attribute job-originating-user-name is set to the verified UPN,
+   e.g. anna.svensson@company.com
+
+4. CUPS passes all job options (duplex, paper, colour, etc.) to the backend
+   via argv[5] as a space-separated key=value string.
+
+5. s3print backend (docker/s3print) runs:
+   a. Parses argv[5] → options dict (copies stripped, handled separately)
+   b. Reads job data from stdin (PDF / PostScript – no pre-processing)
+   c. Looks up anna's X.509 certificate from AD/LDAP (userCertificate)
+   d. Encrypts: openssl cms -encrypt -aes-256-cbc -recip anna_cert.pem
+   e. Uploads ciphertext to S3: jobs/anna.svensson@company.com/<uuid>.cms
+   f. Inserts row in PostgreSQL:
+      (id, user_upn, title, copies, options_json, s3_key, expires_at, 'pending')
+   g. Returns exit 0 → CUPS marks the job complete and empties the spool
+
+6. No job data persists on the CUPS server.
+```
+
+### Job release
+
+```
+1. User walks to the printer, inserts smartcard into reader
+
+2. Chromium kiosk (http://localhost:5000) detects the card via PKCS#11
+   polling (every 1.5 s)
+
+3. PIN pad appears on screen; user enters PIN
+   OK button is disabled until ≥ 4 digits are entered
+
+4. Flask backend (app.py):
+   a. Opens PKCS#11 session with the PIN
+      → fails immediately on wrong PIN or locked card
+   b. Reads certificate from card
+   c. Extracts UPN from SAN otherName OID 1.3.6.1.4.1.311.20.2.3
+
+5. Job list fetched from PostgreSQL:
+   SELECT … FROM pending_jobs WHERE user_upn = '<upn>'
+   Jobs with < 60 min remaining are highlighted red; 60–120 min orange.
+   Job list auto-refreshes every 30 s while logged in.
+
+6. User taps "Skriv ut" on a job (or "Skriv ut alla" to batch-print)
+
+7. Flask backend for each job:
+   a. Verifies job ownership in PostgreSQL (id + user_upn)
+   b. Downloads ciphertext from S3
+   c. Decrypts via PKCS#11:
+        openssl cms -decrypt -engine pkcs11 -inkey pkcs11:type=private
+      Private key never leaves the card; RSA/EC unwrap runs inside hardware
+   d. Sends plaintext to local printer, preserving original print settings:
+        lpr -P <LOCAL_PRINTER> -# <copies>
+            -o sides=<…> -o media=<…> -o print-color-mode=<…> …
+   e. Marks row as status='retrieved', sets retrieved_at and retrieved_by
+
+8. Confirmation shown for 3 s, then job list refreshes automatically
+
+9. User removes card → poll() detects absence → session cleared immediately,
+   PIN pad reappears for the next user
+```
+
+### Job expiry and cleanup
+
+```
+Hourly (Kubernetes CronJob: openshift/cronjob-cleanup.yaml):
+
+1. Calls PostgreSQL function expire_old_jobs():
+   UPDATE print_jobs
+   SET    status = 'expired'
+   WHERE  status IN ('pending', 'cancelled')   ← both statuses
+     AND  expires_at < NOW()
+   RETURNING s3_key
+
+2. For each returned s3_key:
+   s3.delete_object(Bucket=…, Key=s3_key)
+
+Cancelled jobs are cleaned up by the same CronJob (they carry the original
+expires_at from submission, so they are purged within 48 h at most).
+```
 
 ---
 
@@ -64,100 +292,80 @@ Client (Linux/Windows)
 
 ```
 secure-print/
-├── docker/                  # CUPS container (runs in OpenShift)
+├── docker/                       CUPS container (runs in OpenShift)
 │   ├── Dockerfile
-│   ├── cupsd.conf           # CUPS config: TLS, Kerberos, job policy
-│   ├── entrypoint.sh        # Bootstraps TLS/keytab, creates print queue
-│   └── s3print              # Python CUPS backend (encrypt → S3 → PostgreSQL)
+│   ├── cupsd.conf                CUPS config: TLS, Kerberos, job policy
+│   ├── entrypoint.sh             Bootstraps TLS cert + keytab, creates print queue
+│   └── s3print                   Python CUPS backend
+│                                   parse_cups_options() → encrypt → S3 → PostgreSQL
 │
 ├── sql/
-│   └── schema.sql           # Table, indexes, expiry view, expire_old_jobs()
+│   └── schema.sql                Table definition, indexes, pending_jobs view,
+│                                 expire_old_jobs() function
+│                                 Migration comment for existing deployments included
 │
-├── openshift/               # Kubernetes / OpenShift manifests
+├── openshift/                    Kubernetes / OpenShift manifests
 │   ├── namespace.yaml
-│   ├── serviceaccount.yaml  # + anyuid SCC binding (CUPS needs root)
-│   ├── configmap.yaml       # krb5.conf, non-secret settings
-│   ├── secret.yaml.template # Instructions + template for all secrets
-│   ├── deployment.yaml      # 2 replicas, topology spread, health probes
-│   ├── service.yaml         # ClusterIP on port 631
-│   ├── route.yaml           # OpenShift Route, TLS passthrough (required for Kerberos)
-│   ├── cronjob-cleanup.yaml # Hourly expired-job cleanup
-│   └── deploy.sh            # One-shot deployment script
+│   ├── serviceaccount.yaml       + anyuid SCC binding (CUPS needs root)
+│   ├── configmap.yaml            krb5.conf, non-secret settings
+│   ├── secret.yaml.template      Instructions + template for all secrets
+│   ├── deployment.yaml           2 replicas, topology spread, health probes
+│   ├── service.yaml              ClusterIP on port 631
+│   ├── route.yaml                OpenShift Route, TLS passthrough (Kerberos requirement)
+│   ├── cronjob-cleanup.yaml      Hourly: expire pending+cancelled jobs, delete S3 objects
+│   └── deploy.sh                 One-shot deployment script
 │
-└── terminal-app/            # Thin terminal software (runs on the device)
-    ├── app.py               # Flask: card monitor, PIN auth, S3 download, decrypt, print
+└── terminal-app/                 Thin terminal software (runs on the device)
+    ├── app.py                    Flask: card monitor, PIN auth, S3 download,
+    │                             PKCS#11 decrypt, option-preserving lpr, audit logging
     ├── templates/
-    │   └── index.html       # Single-page kiosk UI (vanilla JS, no framework)
+    │   └── index.html            Single-page kiosk UI (vanilla JS, DOM-safe rendering)
     ├── requirements.txt
-    ├── secure-print-terminal.service   # systemd unit
-    └── install.sh           # Interactive installer for Debian/Raspberry Pi
+    ├── secure-print-terminal.service   systemd unit
+    └── install.sh                Interactive installer: packages, CUPS + printer driver,
+                                  PKCS11_LIB auto-detection, Python venv, systemd, kiosk
 ```
 
 ---
 
-## Print submission flow
+## Database schema
 
-```
-1. User prints from any application (Word, LibreOffice, lpr, …)
-
-2. OS sends job via IPPS to spooler.company.com:631
-   Windows 10/11: built-in IPP Everywhere – no driver needed
-   Linux:         lpadmin -p myprinter -v ipps://spooler.company.com:631/printers/s3-queue
-
-3. CUPS authenticates the connection via Kerberos (HTTP Negotiate)
-   The job attribute job-originating-user-name is set to the verified UPN
-   e.g.  anna.svensson@company.com
-
-4. CUPS invokes the s3print backend (docker/s3print):
-   a. Reads job data from stdin (PDF / PostScript)
-   b. Looks up anna's certificate in AD/LDAP  (userCertificate attribute)
-   c. Encrypts with:  openssl cms -encrypt -aes-256-cbc -recip anna_cert.pem
-   d. Uploads ciphertext to S3:  jobs/anna.svensson@company.com/<uuid>.cms
-   e. Inserts row in PostgreSQL:  (id, user_upn, title, s3_key, expires_at, status='pending')
-   f. Returns exit 0 → CUPS marks job complete
-
-5. CUPS spool is empty. No job data persists on the server.
+```sql
+print_jobs
+  id               UUID        PRIMARY KEY
+  cups_job_id      INTEGER                         -- CUPS internal job number
+  user_upn         VARCHAR     NOT NULL            -- anna.svensson@company.com
+  title            VARCHAR     NOT NULL            -- document name
+  copies           INTEGER     NOT NULL DEFAULT 1
+  options          TEXT        NOT NULL DEFAULT '{}' -- JSON: {"sides":"two-sided-…", …}
+  s3_key           VARCHAR     NOT NULL            -- jobs/<upn>/<uuid>.cms
+  encrypted_size   BIGINT      NOT NULL            -- bytes, for UI display
+  submitted_at     TIMESTAMPTZ NOT NULL
+  expires_at       TIMESTAMPTZ NOT NULL            -- submitted_at + JOB_RETENTION_HOURS
+  status           VARCHAR     NOT NULL            -- pending|retrieved|cancelled|expired
+  retrieved_at     TIMESTAMPTZ
+  retrieved_by     VARCHAR                         -- terminal TERMINAL_ID
 ```
 
-## Print release flow
-
+**Migration for existing deployments:**
+```sql
+ALTER TABLE print_jobs ADD COLUMN options TEXT NOT NULL DEFAULT '{}';
 ```
-1. User walks to the printer, inserts smartcard
 
-2. Chromium kiosk (http://localhost:5000) detects card via PKCS#11 polling
-
-3. Numeric PIN pad appears on screen – user enters PIN
-
-4. Flask backend (app.py):
-   a. Opens PKCS#11 session with the PIN – fails fast on wrong PIN / locked card
-   b. Reads certificate from card → extracts UPN from SAN otherName (OID 1.3.6.1.4.1.311.20.2.3)
-
-5. Job list is fetched from PostgreSQL WHERE user_upn = '<upn>' AND status = 'pending'
-
-6. User taps "Skriv ut" on a job
-
-7. Flask backend:
-   a. Verifies job ownership in PostgreSQL
-   b. Downloads ciphertext from S3
-   c. Decrypts:  openssl cms -decrypt -engine pkcs11 -inkey pkcs11:type=private
-      Private key never leaves the smartcard; PKCS#11 engine performs RSA/EC inside the card
-   d. Sends plaintext to local printer:  lpr -P <LOCAL_PRINTER>
-   e. Marks row as  status='retrieved'  in PostgreSQL
-
-8. Confirmation shown for 3 s, then job list refreshes
-
-9. User removes card → Flask session cleared, PIN pad reappears
-```
+**Views:**
+- `pending_jobs` — filters `status = 'pending' AND expires_at > NOW()`;
+  includes `options` column; used by the terminal app
 
 ---
 
 ## Prerequisites
 
 ### CUPS server (OpenShift)
+
 - OpenShift 4.x or Kubernetes 1.26+
-- Active Directory with:
-  - A service account for CUPS with an HTTP SPN: `HTTP/spooler.company.com`
-  - A keytab exported for that account
+- Active Directory:
+  - Service account with HTTP SPN: `HTTP/spooler.company.com`
+  - Keytab exported for that account (`ktpass`)
   - Users with `userCertificate` attribute populated (AD CS or external CA)
 - S3-compatible object store (MinIO, Ceph RGW, AWS S3, …)
 - PostgreSQL 14+
@@ -165,11 +373,12 @@ secure-print/
 - Container registry reachable from OpenShift
 
 ### Thin terminal
-- Debian 12 (Bookworm) or Raspberry Pi OS (64-bit)
+
+- Debian 12 (Bookworm) or Raspberry Pi OS 64-bit
 - PC/SC-compatible smartcard reader (USB or built-in)
-- Network access to PostgreSQL and S3
-- Local CUPS queue pointing to the physical printer
-- Display + Chromium (for the kiosk UI)
+- Network access to PostgreSQL and S3 (no inbound ports required)
+- Display with Chromium support (for the kiosk UI)
+- A network-attached or USB printer supported by CUPS
 
 ---
 
@@ -195,7 +404,7 @@ oc create secret generic cups-keytab \
   --from-file=cups.keytab=cups.keytab \
   -n secure-print
 
-# Environment variables (see secret.yaml.template for all keys)
+# Environment variables (see openshift/secret.yaml.template for all keys)
 oc create secret generic cups-env-secrets \
   --from-literal=LDAP_HOST=dc1.company.com \
   --from-literal=LDAP_BIND_DN='CN=cups-svc,OU=ServiceAccounts,DC=company,DC=com' \
@@ -216,11 +425,8 @@ cd openshift
 bash deploy.sh 1.0.0
 ```
 
-The deployment script:
-1. Builds the container image with `podman build`
-2. Pushes to your registry
-3. Applies all manifests in order
-4. Waits for rollout to complete
+The script builds the container image with `podman build`, pushes to your
+registry, applies all manifests in order, and waits for the rollout to complete.
 
 ### 4. Configure Windows clients
 
@@ -228,8 +434,8 @@ Add printer → "Add by address":
 ```
 https://spooler.company.com:631/printers/s3-queue
 ```
-Windows 10/11 discovers the IPP Everywhere driver automatically.
-Domain-joined machines authenticate via Kerberos silently — no prompt.
+Windows 10/11 discovers the IPP Everywhere queue automatically.
+Domain-joined machines authenticate via Kerberos silently — no password prompt.
 
 ### 5. Configure Linux clients
 
@@ -239,20 +445,51 @@ lpadmin -p secure-print \
         -E
 ```
 
+> **Important:** The `s3-queue` on the submission side has no PPD/filter — it
+> passes the job through as raw PS/PDF. Print settings are captured from argv[5]
+> and stored as JSON. The physical printer driver lives on the terminal, not on
+> the client workstation.
+
 ### 6. Install on thin terminal
 
 ```bash
-sudo bash terminal-app/install.sh
+cd terminal-app
+sudo bash install.sh
 ```
 
-The script installs system packages, creates a Python venv, registers a
-systemd service, and configures Chromium to start in kiosk mode.
+The interactive script:
+1. Installs system packages (`cups`, `opensc`, `pcscd`, `chromium`, …)
+2. Enables `pcscd` and `cups` system services
+3. Creates a restricted `secprint` system user
+4. Builds a Python virtual environment
+5. **Auto-detects PKCS11_LIB path** from architecture (x86-64, ARM64, ARMhf)
+6. Prompts for PostgreSQL / S3 credentials and terminal ID
+7. **Configures the local printer in CUPS** (see Printer drivers below)
+8. Writes `/etc/secure-print/terminal.env` (mode 600, owned by `secprint`)
+9. Installs and enables the `secure-print-terminal` systemd service
+10. Creates a Chromium kiosk autostart entry
+
+#### Printer drivers
+
+When `install.sh` runs the printer setup step it offers five options:
+
+| Option | When to use |
+|--------|------------|
+| **IPP Everywhere** (recommended) | Any network printer manufactured after ~2013 with IPP support. No driver package needed. |
+| **Generic PostScript** | Older PostScript printers without IPP Everywhere support. |
+| **HP (hplip)** | HP printers requiring duplex, stapling, or tray selection. `hplip` is installed; PPD auto-detected from `lpinfo -m`. |
+| **Gutenprint** | Canon, Epson, and other inkjet/laser models. `printer-driver-gutenprint` installed; PPD path prompted. |
+| **Custom PPD** | Manufacturer-supplied `.ppd` file (Konica-Minolta, Ricoh, Xerox, etc.). |
+
+The driver is needed **on the terminal**, not on the submission workstation.
+Data arriving from S3 is raw PS/PDF; the terminal's CUPS converts it to the
+printer's native format (PCL, ESC/P, native IPP, etc.) using the installed driver.
 
 ---
 
 ## Configuration reference
 
-### CUPS backend (`s3print`) environment variables
+### CUPS backend — `s3print` environment variables
 
 | Variable | Description |
 |----------|-------------|
@@ -263,11 +500,13 @@ systemd service, and configures Chromium to start in kiosk mode.
 | `S3_ENDPOINT` | S3-compatible endpoint URL |
 | `S3_ACCESS_KEY` | S3 access key |
 | `S3_SECRET_KEY` | S3 secret key |
-| `S3_BUCKET` | Bucket name for encrypted jobs |
+| `S3_BUCKET` | Bucket name for encrypted job files |
 | `DATABASE_URL` | PostgreSQL connection string |
-| `JOB_RETENTION_HOURS` | Hours before a job expires (default: `48`) |
+| `JOB_RETENTION_HOURS` | Hours until a job expires (default: `48`) |
+| `CERT_STORE_PATH` | *(test mode only)* Path to JSON file mapping UPN → PEM cert |
+| `TEST_MODE` | Set to `1` to skip Kerberos and use `CERT_STORE_PATH` |
 
-### Terminal app (`/etc/secure-print/terminal.env`)
+### Terminal app — `/etc/secure-print/terminal.env`
 
 | Variable | Description |
 |----------|-------------|
@@ -275,46 +514,79 @@ systemd service, and configures Chromium to start in kiosk mode.
 | `S3_ENDPOINT` | S3-compatible endpoint URL |
 | `S3_ACCESS_KEY` | S3 access key |
 | `S3_SECRET_KEY` | S3 secret key |
-| `S3_BUCKET` | Same bucket as above |
-| `LOCAL_PRINTER` | CUPS printer name on this terminal (from `lpstat -p`) |
-| `TERMINAL_ID` | Identifier logged in the `retrieved_by` column |
-| `PKCS11_LIB` | Path to PKCS#11 library (default: OpenSC on x86-64) |
+| `S3_BUCKET` | Same bucket as the backend |
+| `LOCAL_PRINTER` | CUPS printer name on this terminal (verify with `lpstat -p`) |
+| `TERMINAL_ID` | Unique identifier for this terminal; logged in `retrieved_by` |
+| `PKCS11_LIB` | Path to PKCS#11 shared library (auto-detected by `install.sh`) |
+
+**PKCS11_LIB paths by architecture:**
+
+| Architecture | Path |
+|---|---|
+| x86-64 (PC) | `/usr/lib/x86_64-linux-gnu/opensc-pkcs11.so` |
+| ARM64 (Raspberry Pi 4/5) | `/usr/lib/aarch64-linux-gnu/opensc-pkcs11.so` |
+| ARMhf (Raspberry Pi 3) | `/usr/lib/arm-linux-gnueabihf/opensc-pkcs11.so` |
 
 ---
 
-## Database schema
+## Terminal UI features
 
-```sql
-print_jobs
-  id              UUID        PRIMARY KEY
-  cups_job_id     INTEGER
-  user_upn        VARCHAR     NOT NULL        -- anna.svensson@company.com
-  title           VARCHAR     NOT NULL
-  copies          INTEGER     NOT NULL
-  s3_key          VARCHAR     NOT NULL        -- jobs/<upn>/<uuid>.cms
-  encrypted_size  BIGINT      NOT NULL
-  submitted_at    TIMESTAMPTZ NOT NULL
-  expires_at      TIMESTAMPTZ NOT NULL        -- submitted_at + retention
-  status          VARCHAR     NOT NULL        -- pending | retrieved | cancelled | expired
-  retrieved_at    TIMESTAMPTZ
-  retrieved_by    VARCHAR                     -- terminal ID
-```
-
-The `pending_jobs` view filters to `status = 'pending' AND expires_at > NOW()`.
+- **PIN pad** — numeric input with visual dot feedback; OK button disabled until ≥ 4 digits
+- **Job list** — shows title, copies (grammatically correct singular/plural), print options summary, file size, submission time
+- **Print options summary** — e.g. `Dubbelsidig · A4 · Svartvitt` derived from stored options
+- **Expiry warnings** — job cards highlighted orange (< 2 h) or red (< 1 h) with countdown
+- **Print all** — single button to release all pending jobs sequentially; per-card progress indicators
+- **Cancel with confirmation** — inline "Avboka jobbet? / Ja, avboka / Behåll" prevents accidental deletion
+- **Auto-refresh** — job list refreshed every 30 s while logged in (skipped during batch print or open confirm dialog)
+- **Title expansion** — tap/click a truncated job title to expand it in place
+- **Printer name** — shown in the user header so the user knows where to collect their documents
+- **Inactivity timeout** — countdown warning at 60 s remaining; auto-logout after 5 min of inactivity
+- **Card removal** — immediate session clear when smartcard is physically removed
 
 ---
 
 ## Horizontal scaling
 
 Multiple CUPS pods can run concurrently because **no job data is stored in
-the pod**. The `s3print` backend processes each job immediately:
-encrypt → S3 → PostgreSQL → exit 0. The CUPS spool (`emptyDir`) is
-empty between submissions.
+the pod**. The `s3print` backend processes each job atomically:
+encrypt → S3 upload → PostgreSQL insert → exit 0. The CUPS spool (`emptyDir`)
+is empty between submissions.
+
+If the PostgreSQL insert fails, the S3 object is deleted (rollback) and CUPS
+retries the job. No orphaned objects accumulate on partial failure.
 
 The OpenShift `Deployment` is configured with:
 - `replicas: 2` (adjust as needed)
-- `topologySpreadConstraints` to distribute pods across nodes
+- `topologySpreadConstraints` distributes pods across nodes
 - `maxUnavailable: 0` for zero-downtime rolling updates
+
+---
+
+## Local test environment
+
+```bash
+# Start PostgreSQL, MinIO and CUPS with the s3print backend
+docker compose up -d
+
+# Generate test certificate + SoftHSM2 token
+bash test/setup.sh
+
+# Send a test job with print options
+bash test/send-job.sh
+
+# Or manually with options:
+lpr -H localhost:631 -P s3-queue \
+    -o sides=two-sided-long-edge \
+    -o media=A4 \
+    -o print-color-mode=monochrome \
+    testjob.ps
+
+# Inspect the database
+psql "postgresql://printuser:printpass@localhost/secure_print" \
+     -c "SELECT user_upn, title, copies, options, status FROM print_jobs;"
+
+# MinIO web console: http://localhost:9001  (minioadmin / minioadmin123)
+```
 
 ---
 
@@ -322,27 +594,34 @@ The OpenShift `Deployment` is configured with:
 
 | What | Where |
 |------|-------|
-| Job submissions | `journalctl -u cups` (backend logs to stderr → CUPS log) |
-| Job releases | `journalctl -u secure-print-terminal` on each terminal |
-| Audit trail | `print_jobs` table: every submission, retrieval, and cancellation |
-| Expired jobs | `print_jobs WHERE status = 'expired'` |
+| Job submissions | `[s3print]` prefix in CUPS log / pod stderr |
+| AUDIT events (terminal) | `journalctl -u secure-print-terminal` — grep for `AUDIT` |
+| AUDIT events (backend) | Pod logs — grep for `AUDIT` |
+| Job lifecycle | `SELECT * FROM print_jobs ORDER BY submitted_at DESC` |
+| Expired/cancelled jobs | `SELECT * FROM print_jobs WHERE status IN ('expired','cancelled')` |
+| S3 storage | MinIO console or `aws s3 ls s3://secure-print-jobs/ --recursive` |
 
 ---
 
 ## Extending the system
 
-**Add email notification on job receipt**
+**Email notification on job receipt**
 Add a `notify_user()` call in `s3print` after `register_in_db()`.
 The UPN is a valid email address in most AD environments.
 
-**Support multiple printers per terminal**
+**Multiple printers per terminal**
 Set `LOCAL_PRINTER=ask` in `terminal.env` and add a printer-selection
-step to the UI before the job list.
+step to the UI before the job list is shown.
 
-**RFID/NFC badge instead of PIN**
+**RFID / NFC badge instead of PIN**
 Replace the PIN pad in `index.html` with a badge-read event.
 In `app.py`, replace `authenticate_card(pin)` with a badge-to-UPN lookup
-and skip PIN verification (lower security, higher convenience).
+and skip PKCS#11 PIN verification (lower security, higher convenience).
+
+**Admin CLI**
+The `expire_old_jobs()` PostgreSQL function can be called externally.
+An admin script can force-expire individual jobs, list all jobs across users,
+and report S3 storage usage without touching the application code.
 
 ---
 

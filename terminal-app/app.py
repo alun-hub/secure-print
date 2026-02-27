@@ -12,7 +12,9 @@ Flöde:
   4. Skrivs ut på lokal skrivare
 """
 
+import json
 import os
+import re
 import sys
 import subprocess
 import tempfile
@@ -45,6 +47,53 @@ TERMINAL_ID     = os.environ.get("TERMINAL_ID", "terminal-unknown")
 PKCS11_LIB      = os.environ.get("PKCS11_LIB", "/usr/lib/x86_64-linux-gnu/opensc-pkcs11.so")
 
 # ---------------------------------------------------------------------------
+# Hjälpfunktioner för utskriftsinställningar
+# ---------------------------------------------------------------------------
+
+_SAFE_KEY   = re.compile(r'^[a-zA-Z0-9_\-]+$')
+_SAFE_VALUE = re.compile(r'^[a-zA-Z0-9_\-\./: ]+$')
+
+
+def build_lpr_cmd(printer: str, copies: int, options_json: str) -> list[str]:
+    """Bygger lpr-argumentlistan med -o key=value för varje sparad option."""
+    cmd = ["lpr", "-P", printer, "-#", str(copies)]
+    opts = json.loads(options_json or '{}')
+    for key, value in opts.items():
+        if (key != 'copies'
+                and _SAFE_KEY.match(key)
+                and _SAFE_VALUE.match(str(value))):
+            cmd.extend(["-o", f"{key}={value}"])
+    return cmd
+
+
+def summarize_options(opts: dict) -> str:
+    """Genererar läsbar sammanfattning av utskriftsinställningar."""
+    parts = []
+    sides = opts.get('sides', '')
+    if 'two-sided' in sides:
+        parts.append('Dubbelsidig')
+    media = opts.get('media', '')
+    if media:
+        if 'a4' in media.lower():
+            parts.append('A4')
+        elif 'a3' in media.lower():
+            parts.append('A3')
+        elif 'letter' in media.lower():
+            parts.append('Letter')
+        else:
+            parts.append(media)
+    color = opts.get('print-color-mode', '')
+    if color == 'monochrome':
+        parts.append('Svartvitt')
+    elif color == 'color':
+        parts.append('Färg')
+    nup = opts.get('number-up', '')
+    if nup and nup != '1':
+        parts.append(f'{nup}-up')
+    return ' · '.join(parts) if parts else ''
+
+
+# ---------------------------------------------------------------------------
 # Loggning
 # ---------------------------------------------------------------------------
 logging.basicConfig(
@@ -59,7 +108,8 @@ log = logging.getLogger(__name__)
 app = Flask(__name__)
 app.secret_key = secrets.token_bytes(32)
 app.config["SESSION_COOKIE_HTTPONLY"] = True
-app.config["PERMANENT_SESSION_LIFETIME"] = 300  # 5 minuter
+app.config["PERMANENT_SESSION_LIFETIME"] = 300       # 5 minuter
+app.config["SESSION_REFRESH_EACH_REQUEST"] = True    # förläng session vid varje anrop
 
 # ---------------------------------------------------------------------------
 # Smartkortsövervakning (bakgrundstråd)
@@ -234,7 +284,7 @@ def get_pending_jobs(upn: str) -> list[dict]:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 """
-                SELECT id, title, copies, encrypted_size, submitted_at
+                SELECT id, title, copies, options, encrypted_size, submitted_at, expires_at
                 FROM   pending_jobs
                 WHERE  user_upn = %s
                 ORDER  BY submitted_at DESC
@@ -284,7 +334,7 @@ def cancel_job_db(job_id: str, upn: str) -> None:
 
 @app.route("/")
 def index():
-    return render_template("index.html", terminal_id=TERMINAL_ID)
+    return render_template("index.html", terminal_id=TERMINAL_ID, printer=LOCAL_PRINTER)
 
 
 @app.route("/api/status")
@@ -313,12 +363,14 @@ def api_login():
 
     try:
         cert_pem, upn = authenticate_card(pin)
+        session.permanent   = True
         session["upn"]      = upn
         session["pin"]      = pin
         session["cert_pem"] = cert_pem
+        log.info(f"AUDIT login_ok upn={upn} terminal={TERMINAL_ID}")
         return jsonify({"upn": upn})
     except ValueError as exc:
-        log.warning(f"Inloggningsfel: {exc}")
+        log.warning(f"AUDIT login_fail terminal={TERMINAL_ID} reason={exc}")
         return jsonify({"error": str(exc)}), 401
 
 
@@ -326,14 +378,22 @@ def api_login():
 def api_jobs():
     """Lista inloggad användares jobb."""
     if "upn" not in session:
+        log.warning(f"AUDIT unauthorized endpoint=jobs terminal={TERMINAL_ID}")
         return jsonify({"error": "Ej inloggad"}), 401
 
+    now  = datetime.now(timezone.utc)
     jobs = get_pending_jobs(session["upn"])
     for job in jobs:
-        # Gör datumet läsbart och storleken mänsklig
-        job["submitted_at"] = job["submitted_at"].strftime("%d %b %H:%M")
-        job["size_kb"]      = round(job["encrypted_size"] / 1024)
-        job["id"]           = str(job["id"])
+        job["submitted_at"]      = job["submitted_at"].strftime("%d %b %H:%M")
+        job["size_kb"]           = round(job["encrypted_size"] / 1024)
+        job["id"]                = str(job["id"])
+        opts                     = json.loads(job.get("options") or '{}')
+        job["options_summary"]   = summarize_options(opts)
+        minutes_left             = int((job["expires_at"] - now).total_seconds() / 60)
+        job["expires_in_minutes"] = max(0, minutes_left)
+        job.pop("options", None)
+        job.pop("expires_at", None)
+        job.pop("encrypted_size", None)
     return jsonify(jobs)
 
 
@@ -341,6 +401,7 @@ def api_jobs():
 def api_print(job_id: str):
     """Hämta, dekryptera och skriv ut ett jobb."""
     if "upn" not in session:
+        log.warning(f"AUDIT unauthorized endpoint=print job_id={job_id} terminal={TERMINAL_ID}")
         return jsonify({"error": "Ej inloggad"}), 401
 
     upn      = session["upn"]
@@ -366,26 +427,26 @@ def api_print(job_id: str):
         log.info(f"Hämtar {job['s3_key']} för {upn}")
         encrypted = download_from_s3(job["s3_key"])
 
-        log.info("Dekrypterar...")
+        log.info(f"Dekrypterar jobb {job_id} för {upn}...")
         decrypted = decrypt_job(encrypted, cert_pem, pin)
 
         log.info(f"Skriver ut på {LOCAL_PRINTER}...")
         subprocess.run(
-            ["lpr", "-P", LOCAL_PRINTER, "-#", str(job["copies"])],
+            build_lpr_cmd(LOCAL_PRINTER, job["copies"], job.get("options") or "{}"),
             input=decrypted,
             check=True,
             capture_output=True,
         )
 
         mark_retrieved(job_id)
-        log.info(f"Utskrift klar: {job['title']}")
+        log.info(f"AUDIT print_ok upn={upn} job_id={job_id} title={job['title']!r} terminal={TERMINAL_ID}")
         return jsonify({"ok": True, "title": job["title"]})
 
     except subprocess.CalledProcessError as exc:
-        log.error(f"Utskriftsfel: {exc.stderr}")
+        log.error(f"AUDIT print_fail upn={upn} job_id={job_id} terminal={TERMINAL_ID} error={exc.stderr}")
         return jsonify({"error": "Utskriften misslyckades – är skrivaren på?"}), 500
     except Exception as exc:
-        log.error(f"Fel: {exc}", exc_info=True)
+        log.error(f"AUDIT print_fail upn={upn} job_id={job_id} terminal={TERMINAL_ID} error={exc}", exc_info=True)
         return jsonify({"error": "Oväntat fel – försök igen"}), 500
 
 
@@ -393,14 +454,19 @@ def api_print(job_id: str):
 def api_cancel(job_id: str):
     """Avbryt ett jobb (tas bort från kö men S3-filen rensas av cronjob)."""
     if "upn" not in session:
+        log.warning(f"AUDIT unauthorized endpoint=cancel job_id={job_id} terminal={TERMINAL_ID}")
         return jsonify({"error": "Ej inloggad"}), 401
-    cancel_job_db(job_id, session["upn"])
+    upn = session["upn"]
+    cancel_job_db(job_id, upn)
+    log.info(f"AUDIT cancel upn={upn} job_id={job_id} terminal={TERMINAL_ID}")
     return jsonify({"ok": True})
 
 
 @app.route("/api/logout", methods=["POST"])
 def api_logout():
+    upn = session.get("upn", "unknown")
     session.clear()
+    log.info(f"AUDIT logout upn={upn} terminal={TERMINAL_ID}")
     return jsonify({"ok": True})
 
 
