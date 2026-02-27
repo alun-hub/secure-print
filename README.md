@@ -72,6 +72,51 @@ by the intended recipient using their PIN-protected smartcard.
 ---
 
 ## Security model
+## High-level system diagram
+
+```mermaid
+flowchart TB
+
+subgraph CLIENT["User Workstation"]
+    PC["Windows / Linux / macOS"]
+end
+
+subgraph OPENSHIFT["OpenShift / Kubernetes"]
+    CUPS["CUPS\nIPPS 631"]
+    BACKEND["s3print backend"]
+    CRON["Cleanup CronJob"]
+end
+
+subgraph SERVICES["Internal Services"]
+    AD["Active Directory / LDAP"]
+    DB["PostgreSQL"]
+    S3["S3 / MinIO"]
+end
+
+subgraph TERMINAL["Thin Terminal"]
+    APP["Flask App + PKCS#11"]
+    CARD["Smartcard"]
+    PRINTER["Local Printer"]
+end
+
+PC -->|IPPS + Kerberos| CUPS
+CUPS --> BACKEND
+BACKEND -->|LDAP query| AD
+BACKEND -->|Ciphertext| S3
+BACKEND -->|Metadata| DB
+CRON --> DB
+CRON --> S3
+
+APP -->|Read jobs| DB
+APP -->|Download| S3
+APP -->|Decrypt| CARD
+APP -->|lpr| PRINTER
+```
+---
+
+# Security model
+
+## End-to-end flow
 
 ```mermaid
 sequenceDiagram
@@ -80,96 +125,36 @@ participant User
 participant PC
 participant CUPS
 participant s3print
-participant AD as Active Directory (LDAP)
+participant AD as Active Directory
 participant S3
 participant DB
 participant Terminal
-participant Card as Smartcard (PKCS#11)
+participant Card as Smartcard
 participant Printer
 
 User->>PC: Print document
-PC->>CUPS: IPPS (TLS) + Kerberos ticket
-CUPS->>s3print: Job + options (argv[5])
+PC->>CUPS: IPPS (TLS) + Kerberos
+CUPS->>s3print: Job + options
 
-s3print->>AD: Fetch userCertificate
+s3print->>AD: Fetch certificate
 s3print->>s3print: Encrypt (CMS AES-256-CBC)
 s3print->>S3: Upload ciphertext
-s3print->>DB: Insert metadata (status=pending)
+s3print->>DB: Insert metadata
 
-User->>Terminal: Insert smartcard
-Terminal->>Card: PIN authentication
-Card-->>Terminal: Auth OK
+User->>Terminal: Insert card
+Terminal->>Card: PIN auth
+Card-->>Terminal: OK
 
-Terminal->>DB: Fetch pending jobs
+Terminal->>DB: Fetch jobs
 Terminal->>S3: Download ciphertext
-Terminal->>Card: Decrypt (private key stays on card)
+Terminal->>Card: Decrypt
 Card-->>Terminal: Plaintext
-Terminal->>Printer: lpr with preserved options
+Terminal->>Printer: Print
 Terminal->>DB: status=retrieved
 ```
-```mermaid
-flowchart TB
 
-%% ================================
-%% ZONES
-%% ================================
-subgraph USER_NET["User Network (Domain-joined clients)"]
-    CLIENT["Client PC\nWindows / Linux / macOS"]
-end
+---
 
-subgraph DMZ["Ingress / OpenShift Route"]
-    ROUTE["spooler.company.com\nTLS Passthrough"]
-end
-
-subgraph CLUSTER["OpenShift / Kubernetes Cluster"]
-    CUPS["CUPS Pod\n0.0.0.0:631\nIPPS (TLS 1.2+)"]
-    BACKEND["s3print backend\n(internal only)"]
-    CRON["Cleanup CronJob\n(hourly)"]
-end
-
-subgraph INTERNAL_SERVICES["Internal Services (Cluster/VPN only)"]
-    AD["Active Directory / LDAP\n389/636 + Kerberos"]
-    DB["PostgreSQL 14+\nTCP 5432 (TLS)"]
-    S3["S3 / MinIO\nHTTPS 443"]
-end
-
-subgraph TERMINAL_NET["Printer / Terminal Network"]
-    TERMINAL["Thin Terminal\nDebian\nOutbound only"]
-    PRINTER["Local Printer\nIPP / USB"]
-    CARD["Smartcard\n(PKCS#11 local)"]
-end
-
-%% ================================
-%% FLOWS
-%% ================================
-
-%% Client submission
-CLIENT -->|IPPS 631/TCP\nTLS 1.2+| ROUTE
-ROUTE -->|TLS passthrough| CUPS
-
-%% Auth
-CUPS -->|Kerberos (HTTP Negotiate)| AD
-BACKEND -->|LDAP query\nuserCertificate| AD
-
-%% Storage
-BACKEND -->|HTTPS 443\n(ciphertext only)| S3
-BACKEND -->|TCP 5432\nmetadata insert| DB
-
-%% Cleanup
-CRON -->|expire_old_jobs()| DB
-CRON -->|delete_object()| S3
-
-%% Terminal outbound only
-TERMINAL -->|TCP 5432\nread-only| DB
-TERMINAL -->|HTTPS 443| S3
-TERMINAL -->|Localhost 5000| TERMINAL
-
-%% Smartcard local only
-TERMINAL -->|PKCS#11| CARD
-
-%% Printing
-TERMINAL -->|IPP / USB| PRINTER
-```
 ### Threat mitigations
 
 | Threat | Mitigation |
@@ -730,4 +715,3 @@ and report S3 storage usage without touching the application code.
 MIT
 ```
 
-Kopiera allt detta och klistra in i GitHub-editorn! ✅
