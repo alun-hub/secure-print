@@ -1,0 +1,24 @@
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: cups-ipps
+  namespace: secure-print
+  labels:
+    app: cups
+spec:
+  host: spooler.company.com
+
+  port:
+    targetPort: ipps
+
+  # Passthrough: TLS termineras i CUPS, inte i routern
+  # Krävs för Kerberos SPNEGO (HTTP Negotiate fungerar inte vid TLS-terminering)
+  tls:
+    termination: passthrough
+
+  to:
+    kind:   Service
+    name:   cups
+    weight: 100
+
+  wildcardPolicy: None

@@ -1,0 +1,277 @@
+#!/usr/bin/env python3
+"""
+CUPS Backend: s3print
+
+Tar emot utskriftsjobb från CUPS, krypterar med användarens
+publika nyckel (från LDAP/AD), laddar upp till S3 och registrerar
+metadata i PostgreSQL.
+
+Kräver miljövariabler:
+  LDAP_HOST, LDAP_BIND_DN, LDAP_BIND_PASSWORD, LDAP_BASE_DN
+  S3_ENDPOINT, S3_ACCESS_KEY, S3_SECRET_KEY, S3_BUCKET
+  DATABASE_URL
+"""
+
+import os
+import sys
+import subprocess
+import tempfile
+import uuid
+import logging
+from datetime import datetime, timezone, timedelta
+from pathlib import Path
+
+logging.basicConfig(
+    stream=sys.stderr,
+    level=logging.INFO,
+    format="[s3print] %(levelname)s: %(message)s",
+)
+log = logging.getLogger("s3print")
+
+
+# ---------------------------------------------------------------------------
+# Device discovery (CUPS kallar backend utan argument för att lista enheter)
+# ---------------------------------------------------------------------------
+
+def device_discovery() -> None:
+    print('network s3print:// "S3 Secure Print" "Krypterad säker utskrift via S3"')
+
+
+# ---------------------------------------------------------------------------
+# LDAP – hämta användarens certifikat
+# ---------------------------------------------------------------------------
+
+def get_user_certificate(user_upn: str) -> bytes:
+    """
+    Hämtar DER-kodat X.509-certifikat för användaren från LDAP/AD.
+    Certifikatet innehåller den publika nyckel vi krypterar med.
+    """
+    import ldap
+    import ldap.filter
+
+    host    = os.environ["LDAP_HOST"]
+    bind_dn = os.environ["LDAP_BIND_DN"]
+    bind_pw = os.environ["LDAP_BIND_PASSWORD"]
+    base_dn = os.environ["LDAP_BASE_DN"]
+
+    conn = ldap.initialize(f"ldap://{host}")
+    conn.set_option(ldap.OPT_REFERRALS, 0)
+    conn.set_option(ldap.OPT_NETWORK_TIMEOUT, 10)
+    conn.simple_bind_s(bind_dn, bind_pw)
+
+    try:
+        safe_upn = ldap.filter.escape_filter_chars(user_upn)
+        results = conn.search_s(
+            base_dn,
+            ldap.SCOPE_SUBTREE,
+            f"(userPrincipalName={safe_upn})",
+            ["userCertificate"],
+        )
+    finally:
+        conn.unbind_s()
+
+    if not results or not results[0][1].get("userCertificate"):
+        raise ValueError(f"Inget certifikat hittat för {user_upn}")
+
+    cert_der = results[0][1]["userCertificate"][0]
+    log.info(f"Certifikat hämtat ({len(cert_der)} bytes DER)")
+    return cert_der
+
+
+# ---------------------------------------------------------------------------
+# Kryptering – CMS/PKCS#7 med AES-256-CBC
+# ---------------------------------------------------------------------------
+
+def encrypt_job(job_data: bytes, cert_der: bytes) -> bytes:
+    """
+    Krypterar jobbdata med användarens publika nyckel via openssl cms.
+    Den privata nyckeln (på smartkortet) krävs för att dekryptera.
+    """
+    with tempfile.TemporaryDirectory(prefix="s3print_") as tmpdir:
+        job_file       = Path(tmpdir) / "job.dat"
+        cert_pem_file  = Path(tmpdir) / "user.pem"
+        encrypted_file = Path(tmpdir) / "job.cms"
+
+        job_file.write_bytes(job_data)
+
+        # Konvertera DER → PEM
+        subprocess.run(
+            ["openssl", "x509", "-inform", "DER", "-out", str(cert_pem_file)],
+            input=cert_der,
+            check=True,
+            capture_output=True,
+        )
+
+        # Kryptera med hybridkryptering: AES-256-CBC för data, RSA/EC för nyckeln
+        result = subprocess.run(
+            [
+                "openssl", "cms", "-encrypt",
+                "-aes-256-cbc",
+                "-in",    str(job_file),
+                "-out",   str(encrypted_file),
+                "-recip", str(cert_pem_file),
+            ],
+            check=True,
+            capture_output=True,
+        )
+
+        encrypted = encrypted_file.read_bytes()
+        log.info(f"Krypterat: {len(job_data)} → {len(encrypted)} bytes")
+        return encrypted
+
+
+# ---------------------------------------------------------------------------
+# S3 – ladda upp och ta bort
+# ---------------------------------------------------------------------------
+
+def _s3_client():
+    import boto3
+    from botocore.config import Config
+    return boto3.client(
+        "s3",
+        endpoint_url=os.environ["S3_ENDPOINT"],
+        aws_access_key_id=os.environ["S3_ACCESS_KEY"],
+        aws_secret_access_key=os.environ["S3_SECRET_KEY"],
+        config=Config(signature_version="s3v4"),
+    )
+
+
+def upload_to_s3(encrypted_data: bytes, s3_key: str) -> None:
+    _s3_client().put_object(
+        Bucket=os.environ["S3_BUCKET"],
+        Key=s3_key,
+        Body=encrypted_data,
+        ContentType="application/cms",
+    )
+    log.info(f"S3-uppladdning klar: {s3_key}")
+
+
+def delete_from_s3(s3_key: str) -> None:
+    try:
+        _s3_client().delete_object(
+            Bucket=os.environ["S3_BUCKET"],
+            Key=s3_key,
+        )
+        log.info(f"S3-rollback: {s3_key} borttagen")
+    except Exception as exc:
+        log.warning(f"Kunde inte ta bort S3-objekt vid rollback: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# PostgreSQL – registrera och ta bort
+# ---------------------------------------------------------------------------
+
+def register_in_db(
+    job_uuid: str,
+    cups_job_id: int,
+    user_upn: str,
+    title: str,
+    copies: int,
+    s3_key: str,
+    encrypted_size: int,
+) -> None:
+    import psycopg2
+
+    retention_hours = int(os.environ.get("JOB_RETENTION_HOURS", "48"))
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=retention_hours)
+
+    conn = psycopg2.connect(os.environ["DATABASE_URL"])
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO print_jobs (
+                    id, cups_job_id, user_upn, title, copies,
+                    s3_key, encrypted_size, submitted_at, expires_at, status
+                ) VALUES (
+                    %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, 'pending'
+                )
+                """,
+                (
+                    job_uuid, cups_job_id, user_upn, title, copies,
+                    s3_key, encrypted_size,
+                    datetime.now(timezone.utc), expires_at,
+                ),
+            )
+        conn.commit()
+        log.info(f"Registrerat i databasen: {job_uuid} (upphör {expires_at.isoformat()})")
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Huvudlogik
+# ---------------------------------------------------------------------------
+
+def main() -> int:
+    # CUPS: device discovery mode (0 argument)
+    if len(sys.argv) == 1:
+        device_discovery()
+        return 0
+
+    if len(sys.argv) < 6:
+        log.error(f"Fel antal argument: {len(sys.argv) - 1} (förväntar 5–6)")
+        return 2
+
+    cups_job_id = int(sys.argv[1])
+    user_upn    = sys.argv[2]
+    title       = sys.argv[3]
+    copies      = int(sys.argv[4])
+    # sys.argv[5] = options (används ej)
+    job_file    = sys.argv[6] if len(sys.argv) > 6 else None
+
+    log.info(f"Tar emot jobb {cups_job_id} från '{user_upn}': {title!r} ({copies} kopia/or)")
+
+    # Läs jobbdata
+    if job_file:
+        job_data = Path(job_file).read_bytes()
+    else:
+        job_data = sys.stdin.buffer.read()
+    log.info(f"Jobbdata: {len(job_data)} bytes")
+
+    s3_key = None
+
+    try:
+        # 1. Hämta certifikat
+        cert_der = get_user_certificate(user_upn)
+
+        # 2. Kryptera
+        encrypted_data = encrypt_job(job_data, cert_der)
+
+        # 3. Generera unika ID:n
+        job_uuid = str(uuid.uuid4())
+        s3_key   = f"jobs/{user_upn}/{job_uuid}.cms"
+
+        # 4. Ladda upp till S3
+        upload_to_s3(encrypted_data, s3_key)
+
+        # 5. Registrera i PostgreSQL (vid fel: rulla tillbaka S3)
+        try:
+            register_in_db(
+                job_uuid, cups_job_id, user_upn, title,
+                copies, s3_key, len(encrypted_data),
+            )
+        except Exception as db_exc:
+            log.error(f"Databasfel: {db_exc}")
+            delete_from_s3(s3_key)
+            return 1
+
+        log.info(f"Jobb {job_uuid} sparat framgångsrikt")
+        return 0
+
+    except ValueError as exc:
+        log.error(f"Certifikatfel: {exc}")
+        return 1
+    except subprocess.CalledProcessError as exc:
+        log.error(f"Krypteringsfel: {exc.stderr.decode(errors='replace') if exc.stderr else exc}")
+        return 1
+    except Exception as exc:
+        log.error(f"Oväntat fel: {exc}", exc_info=True)
+        if s3_key:
+            delete_from_s3(s3_key)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

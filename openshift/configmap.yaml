@@ -1,0 +1,32 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cups-config
+  namespace: secure-print
+data:
+  # -------------------------------------------------------------------------
+  # Kerberos-konfiguration – anpassa realm och KDC
+  # -------------------------------------------------------------------------
+  krb5.conf: |
+    [libdefaults]
+      default_realm    = COMPANY.COM
+      dns_lookup_realm = true
+      dns_lookup_kdc   = true
+      forwardable      = true
+      rdns             = false
+
+    [realms]
+      COMPANY.COM = {
+        kdc          = dc1.company.com
+        admin_server = dc1.company.com
+      }
+
+    [domain_realm]
+      .company.com = COMPANY.COM
+      company.com  = COMPANY.COM
+
+  # -------------------------------------------------------------------------
+  # Miljöinställningar – icke-känsliga värden
+  # -------------------------------------------------------------------------
+  JOB_RETENTION_HOURS: "48"
+  TERMINAL_ID_HEADER:  "X-Terminal-ID"

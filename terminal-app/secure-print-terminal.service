@@ -1,0 +1,37 @@
+# =============================================================================
+# systemd-tjänst för Secure Print Terminal
+# Placera i: /etc/systemd/system/secure-print-terminal.service
+# Aktivera:  systemctl enable --now secure-print-terminal
+# =============================================================================
+
+[Unit]
+Description=Secure Print Terminal
+After=network-online.target pcscd.service
+Wants=network-online.target pcscd.service
+
+[Service]
+Type=simple
+User=secprint
+WorkingDirectory=/opt/secure-print-terminal
+
+# Miljövariabler – känsliga värden i separat fil
+EnvironmentFile=/etc/secure-print/terminal.env
+
+ExecStart=/opt/secure-print-terminal/venv/bin/python app.py
+
+# Starta om vid krasch
+Restart=always
+RestartSec=3
+
+# Säkerhetsbegränsningar
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/tmp
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=secure-print-terminal
+
+[Install]
+WantedBy=graphical.target

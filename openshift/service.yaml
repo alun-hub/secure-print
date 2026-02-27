@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: cups
+  namespace: secure-print
+  labels:
+    app: cups
+spec:
+  selector:
+    app: cups
+  ports:
+    - name:       ipps
+      port:       631
+      targetPort: 631
+      protocol:   TCP
+  # ClusterIP - exponeras externt via Route (passthrough TLS)
+  type: ClusterIP

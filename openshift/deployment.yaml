@@ -1,0 +1,144 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cups
+  namespace: secure-print
+  labels:
+    app: cups
+spec:
+  # Flera replicas möjligt eftersom jobb lagras i S3+PostgreSQL,
+  # inte lokalt i CUPS-spolen
+  replicas: 2
+
+  selector:
+    matchLabels:
+      app: cups
+
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge:        1
+      maxUnavailable:  0   # ingen nedtid vid uppgraderingar
+
+  template:
+    metadata:
+      labels:
+        app: cups
+    spec:
+      serviceAccountName: cups-sa
+
+      # CUPS kräver root för att hantera skrivare och binda till port 631
+      securityContext:
+        runAsUser:  0
+        runAsGroup: 0
+        fsGroup:    7       # lp-gruppen i Debian
+
+      # Distribuera pods på olika noder
+      topologySpreadConstraints:
+        - maxSkew:           1
+          topologyKey:       kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: cups
+
+      containers:
+        - name: cups
+          image: registry.company.com/secure-print/cups:latest
+          imagePullPolicy: Always
+
+          ports:
+            - name:          ipps
+              containerPort: 631
+              protocol:      TCP
+
+          # Miljövariabler från Secret
+          envFrom:
+            - secretRef:
+                name: cups-env-secrets
+
+          # Volymmountar
+          volumeMounts:
+            # CUPS-konfiguration
+            - name:      cups-config
+              mountPath: /etc/cups/cupsd.conf
+              subPath:   cupsd.conf
+              readOnly:  true
+
+            # Kerberos-konfiguration
+            - name:      cups-config
+              mountPath: /etc/krb5.conf
+              subPath:   krb5.conf
+              readOnly:  true
+
+            # TLS-certifikat
+            - name:      cups-tls
+              mountPath: /etc/cups/secrets/server.crt
+              subPath:   tls.crt
+              readOnly:  true
+            - name:      cups-tls
+              mountPath: /etc/cups/secrets/server.key
+              subPath:   tls.key
+              readOnly:  true
+
+            # Kerberos keytab
+            - name:      cups-keytab
+              mountPath: /etc/cups/secrets/cups.keytab
+              subPath:   cups.keytab
+              readOnly:  true
+
+            # Tillfällig spool – töms direkt när backend skickat till S3
+            - name:      spool
+              mountPath: /var/spool/cups
+
+            # Loggar
+            - name:      logs
+              mountPath: /var/log/cups
+
+          # Hälsokontroller
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - "lpstat -r 2>/dev/null | grep -q 'scheduler is running'"
+            initialDelaySeconds: 20
+            periodSeconds:       30
+            failureThreshold:    3
+
+          readinessProbe:
+            tcpSocket:
+              port: 631
+            initialDelaySeconds: 10
+            periodSeconds:       10
+            failureThreshold:    3
+
+          # Resursgränser
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu:    "100m"
+            limits:
+              memory: "512Mi"
+              cpu:    "500m"
+
+      volumes:
+        - name: cups-config
+          configMap:
+            name: cups-config
+
+        - name: cups-tls
+          secret:
+            secretName:  cups-tls
+            defaultMode: 0640
+
+        - name: cups-keytab
+          secret:
+            secretName:  cups-keytab
+            defaultMode: 0640
+
+        - name: spool
+          emptyDir: {}
+
+        - name: logs
+          emptyDir: {}
