@@ -17,7 +17,9 @@ WorkingDirectory=/opt/secure-print-terminal
 # Miljövariabler – känsliga värden i separat fil
 EnvironmentFile=/etc/secure-print/terminal.env
 
-ExecStart=/opt/secure-print-terminal/venv/bin/python app.py
+Environment=DISPLAY=:0
+Environment=QT_QPA_PLATFORM=xcb
+ExecStart=/opt/secure-print-terminal/venv/bin/python app_qt.py
 
 # Starta om vid krasch
 Restart=always

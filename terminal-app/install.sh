@@ -30,9 +30,8 @@ apt-get install -y --no-install-recommends \
     opensc pcscd \
     libengine-pkcs11-openssl \
     cups \
-    chromium \
-    xdotool \
-    unclutter          # döljer muspekaren på pekskärm
+    python3-pyqt6 \
+    libqt6widgets6
 
 # Aktivera och starta pcscd (smartkortsdemonen) och CUPS
 systemctl enable --now pcscd
@@ -55,7 +54,7 @@ usermod -aG lpadmin secprint 2>/dev/null || true
 # ── Python virtual environment ───────────────────────────────
 log "Skapar Python virtual environment..."
 python3 -m venv "$APP_DIR/venv"
-"$APP_DIR/venv/bin/pip" install --quiet -r "$APP_DIR/requirements.txt"
+"$APP_DIR/venv/bin/pip" install --quiet -r "$APP_DIR/requirements-qt.txt"
 chown -R secprint:secprint "$APP_DIR"
 
 # ── Detektera PKCS11-bibliotekssökväg ────────────────────────
@@ -206,41 +205,6 @@ EOF
     chown secprint:secprint "$ENV_FILE"
     log "Konfiguration sparad: $ENV_FILE"
 fi
-
-# ── Kiosk-startskript ────────────────────────────────────────
-log "Skapar kiosk-startskript..."
-cat > /etc/secure-print/kiosk.sh <<'KIOSK'
-#!/bin/bash
-# Startas av displayhanteraren (LightDM/GDM autostart)
-
-# Dölj muspekare
-unclutter -idle 1 &
-
-# Vänta tills Flask svarar
-until curl -s http://127.0.0.1:5000 > /dev/null; do sleep 1; done
-
-# Starta Chromium i kiosk-läge
-exec chromium \
-    --kiosk \
-    --noerrdialogs \
-    --disable-infobars \
-    --disable-session-crashed-bubble \
-    --disable-component-update \
-    --no-first-run \
-    --check-for-update-interval=31536000 \
-    http://127.0.0.1:5000
-KIOSK
-chmod +x /etc/secure-print/kiosk.sh
-
-# Skapa autostart-fil (XFCE/LXDE/Openbox)
-mkdir -p /etc/xdg/autostart
-cat > /etc/xdg/autostart/secure-print-kiosk.desktop <<'DESKTOP'
-[Desktop Entry]
-Type=Application
-Name=Secure Print Kiosk
-Exec=/etc/secure-print/kiosk.sh
-X-GNOME-Autostart-enabled=true
-DESKTOP
 
 # ── systemd-tjänst ───────────────────────────────────────────
 log "Installerar systemd-tjänst..."
