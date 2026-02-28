@@ -486,9 +486,10 @@ class LoginWorker(QThread):
             cert_pem, upn = authenticate_card(self._pin)
             self.success.emit(upn, cert_pem)
         except ValueError as exc:
+            log.warning(f"AUDIT login_fail terminal={TERMINAL_ID} reason={exc}")
             self.failure.emit(str(exc))
         except Exception as exc:
-            log.error(f"Oväntat inloggningsfel: {exc}", exc_info=True)
+            log.error(f"AUDIT login_fail terminal={TERMINAL_ID} reason={exc}", exc_info=True)
             self.failure.emit("Oväntat fel – försök igen")
 
 
@@ -1073,6 +1074,7 @@ class MainWindow(QMainWindow):
         self._cert_pem = ""
         self._pin      = ""
         self._workers  = []
+        self._card_present = False
 
         # Skärmar
         self._wait       = WaitScreen()
@@ -1121,12 +1123,14 @@ class MainWindow(QMainWindow):
 
     def _on_card_inserted(self):
         log.info("Kort isatt – visar PIN-skärm")
+        self._card_present = True
         self._pin_screen.reset()
         self._stack.setCurrentWidget(self._pin_screen)
         self._pin_screen.setFocus()
 
     def _on_card_removed(self):
         log.info("Kort borttaget – loggar ut")
+        self._card_present = False
         self._logout()
 
     def _logout(self):
@@ -1135,7 +1139,13 @@ class MainWindow(QMainWindow):
         self._cert_pem = ""
         self._pin      = ""
         self._idle_timer.stop()
-        self._stack.setCurrentWidget(self._wait)
+        if self._card_present:
+            # Kortet sitter kvar – visa PIN-skärm direkt för nästa användare
+            self._pin_screen.reset()
+            self._stack.setCurrentWidget(self._pin_screen)
+            self._pin_screen.setFocus()
+        else:
+            self._stack.setCurrentWidget(self._wait)
 
     def _do_login(self, pin: str):
         worker = LoginWorker(pin)
