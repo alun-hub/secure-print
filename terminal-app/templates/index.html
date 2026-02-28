@@ -428,7 +428,7 @@
 
     const btnYes = document.createElement("button");
     btnYes.className   = "btn-confirm-yes";
-    btnYes.textContent = "Ja, avboka";
+    btnYes.textContent = "Ja, avbryt";
     btnYes.addEventListener("click", () => { touch(); doCancel(j.id); });
 
     const btnNo = document.createElement("button");
@@ -602,23 +602,32 @@
   // ── Polling: kortläge + server-session ────────────────────
   async function poll() {
     try {
-      const r    = await fetch("/api/status");
-      const data = await r.json();
+      const r      = await fetch("/api/status");
+      const data   = await r.json();
+      const active = document.querySelector(".section.active")?.id;
 
-      if (lastAuth && !data.card_present) {
-        stopSessionTimer();
-        stopJobsRefresh();
-        currentUpn = null;
-        show("sec-wait");
-      } else if (lastAuth && !data.authenticated) {
-        // Server-session utgången
-        stopSessionTimer();
-        stopJobsRefresh();
-        currentUpn = null;
-        show("sec-wait");
-      } else if (data.card_present && !data.authenticated) {
-        const active = document.querySelector(".section.active")?.id;
+      if (!data.card_present) {
+        // Inget kort – alltid tillbaka till vänta-skärmen, oavsett var vi är
+        if (active !== "sec-wait") {
+          stopSessionTimer();
+          stopJobsRefresh();
+          currentUpn = null;
+          pin = "";
+          updatePinDisplay();
+          show("sec-wait");
+        }
+      } else if (!data.authenticated) {
+        // Kort isatt men ej inloggad (ny insättning eller session utgången)
         if (active === "sec-wait") {
+          pin = "";
+          updatePinDisplay();
+          document.getElementById("pin-error").style.display = "none";
+          show("sec-pin");
+        } else if (lastAuth) {
+          // Var inloggad men session utgick – tillbaka till PIN
+          stopSessionTimer();
+          stopJobsRefresh();
+          currentUpn = null;
           pin = "";
           updatePinDisplay();
           document.getElementById("pin-error").style.display = "none";

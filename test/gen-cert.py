@@ -24,7 +24,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 
 UPN       = "testuser@company.com"
-UPN_OID   = x509.ObjectIdentifier([1, 3, 6, 1, 4, 1, 311, 20, 2, 3])
+UPN_OID   = x509.ObjectIdentifier("1.3.6.1.4.1.311.20.2.3")
 OUT_DIR   = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).parent / "pki"
 
 

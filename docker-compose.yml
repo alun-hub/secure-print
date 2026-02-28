@@ -10,7 +10,7 @@ services:
 
   # ── PostgreSQL ──────────────────────────────────────────────────────────────
   postgres:
-    image: postgres:16-alpine
+    image: docker.io/library/postgres:16-alpine
     environment:
       POSTGRES_DB:       secure_print
       POSTGRES_USER:     printuser
@@ -18,7 +18,7 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - ./sql/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
+      - ./sql/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:z,ro
       - pg-data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U printuser -d secure_print"]
@@ -28,7 +28,7 @@ services:
 
   # ── MinIO (S3-kompatibel objektlagring) ─────────────────────────────────────
   minio:
-    image: minio/minio:latest
+    image: docker.io/minio/minio:latest
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER:     minioadmin
@@ -46,7 +46,7 @@ services:
 
   # ── Skapar S3-bucket vid uppstart ───────────────────────────────────────────
   minio-init:
-    image: minio/mc:latest
+    image: docker.io/minio/mc:latest
     depends_on:
       minio:
         condition: service_healthy
@@ -69,7 +69,7 @@ services:
       minio-init:
         condition: service_completed_successfully
     ports:
-      - "631:631"
+      - "1631:631"   # rootless podman kan inte binda port 631 – använd localhost:1631
     environment:
       TEST_MODE:        "1"
       CERT_STORE_PATH:  /etc/cups/test/certs.json
@@ -80,15 +80,39 @@ services:
       DATABASE_URL:     postgresql://printuser:printpass@postgres/secure_print
       JOB_RETENTION_HOURS: "48"
     volumes:
-      - ./test/cupsd-local.conf:/etc/cups/cupsd.conf:ro
+      - ./test/cupsd-local.conf:/etc/cups/cupsd.conf:z,ro
+      # CUPS 2.4+: SetEnv/PassEnv måste vara i cups-files.conf
+      - ./test/cups-files-local.conf:/etc/cups/cups-files.conf:z,ro
       # certs.json genereras av test/setup.sh
-      - ./test/certs.json:/etc/cups/test/certs.json:ro
+      - ./test/certs.json:/etc/cups/test/certs.json:z,ro
     healthcheck:
       test: ["CMD-SHELL", "lpstat -r 2>/dev/null | grep -q 'scheduler is running'"]
       interval: 10s
       timeout: 5s
       retries: 12
       start_period: 20s
+
+  # ── Terminal-UI (demo med SoftHSM2-smartkort) ───────────────────────────────
+  terminal:
+    build:
+      context: .
+      dockerfile: terminal-app/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    ports:
+      - "5000:5000"
+    environment:
+      DATABASE_URL:    postgresql://printuser:printpass@postgres/secure_print
+      S3_ENDPOINT:     http://minio:9000
+      S3_ACCESS_KEY:   minioadmin
+      S3_SECRET_KEY:   minioadmin123
+      S3_BUCKET:       secure-print-jobs
+      # PKCS11_LIB, REVOCATION_CHECK, FLASK_HOST sätts av docker-entrypoint.sh
 
 volumes:
   pg-data:

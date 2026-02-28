@@ -76,6 +76,15 @@ def build_lpr_cmd(printer: str, copies: int, options_json: str) -> list[str]:
     return cmd
 
 
+def _detect_print_suffix(data: bytes) -> str:
+    """Detekterar filformat ur magic bytes och returnerar lämplig filändelse."""
+    if data[:5] == b'%PDF-':
+        return '.pdf'
+    if data[:2] == b'%!':
+        return '.ps'
+    return '.dat'
+
+
 def summarize_options(opts: dict) -> str:
     """Genererar läsbar sammanfattning av utskriftsinställningar."""
     parts = []
@@ -241,35 +250,47 @@ def authenticate_card(pin: str) -> tuple[str, str]:
 def decrypt_job(encrypted_data: bytes, cert_pem: str, pin: str) -> bytes:
     """
     Dekrypterar CMS-envelopad jobbdata med smartkortets privata nyckel.
-    PIN skickas via miljövariabel (PKCS11_PIN) – visas ej i processlistan.
+    PIN skickas via en temporär fil – visas ej i processlistan.
+    Använder pkcs11-provider (OpenSSL 3.x) i stället för det utgångna pkcs11-engine.
     """
+    # Krypterad data och certifikat behöver ligga på disk (openssl cms kräver det).
+    # PIN skickas via en FIFO (named pipe) – berör aldrig disk, bara kernelns RAM-buffert.
+    # Dekrypterad output skickas till stdout – berör aldrig disk.
     with tempfile.TemporaryDirectory(prefix="secprint_") as tmp:
-        enc_file  = Path(tmp) / "job.cms"
-        cert_file = Path(tmp) / "user.pem"
-        out_file  = Path(tmp) / "job.dat"
+        tmp_path  = Path(tmp)
+        enc_file  = tmp_path / "job.cms"
+        cert_file = tmp_path / "user.pem"
+        pin_pipe  = tmp_path / "pin.fifo"
 
         enc_file.write_bytes(encrypted_data)
         cert_file.write_text(cert_pem)
+        os.mkfifo(pin_pipe, mode=0o600)
 
-        env = os.environ.copy()
-        env["PKCS11_PIN"] = pin
+        # Skriv PIN i en tråd – open() på FIFO blockerar tills openssl läser
+        def _write_pin() -> None:
+            with open(pin_pipe, "w") as fh:
+                fh.write(pin)
 
-        subprocess.run(
+        pin_thread = threading.Thread(target=_write_pin, daemon=True)
+        pin_thread.start()
+
+        result = subprocess.run(
             [
                 "openssl", "cms", "-decrypt",
+                "-binary",
                 "-in",    str(enc_file),
                 "-recip", str(cert_file),
-                "-inkey", "pkcs11:type=private",
-                "-keyform", "engine",
-                "-engine", "pkcs11",
-                "-out",   str(out_file),
+                "-inkey", f"pkcs11:type=private;pin-source=file:{pin_pipe}",
+                "-provider", "pkcs11",
+                "-provider", "default",
+                "-out",   "/dev/stdout",
             ],
-            env=env,
             check=True,
             capture_output=True,
         )
 
-        return out_file.read_bytes()
+        pin_thread.join(timeout=5)
+        return result.stdout
 
 
 # ---------------------------------------------------------------------------
@@ -601,13 +622,23 @@ def api_print(job_id: str):
         log.info(f"Dekrypterar jobb {job_id} för {upn}...")
         decrypted = decrypt_job(encrypted, cert_pem, pin)
 
-        log.info(f"Skriver ut på {LOCAL_PRINTER}...")
-        subprocess.run(
-            build_lpr_cmd(LOCAL_PRINTER, job["copies"], job.get("options") or "{}"),
-            input=decrypted,
-            check=True,
-            capture_output=True,
-        )
+        # Skriv till tempfil med rätt ändelse så CUPS kan identifiera formatet
+        # och tillämpa rätt filterkedja (t.ex. PDF → raster för bläckstråleskrivare).
+        # Att skicka data via stdin utan formatinfo ger skräptecken på skrivaren.
+        suffix = _detect_print_suffix(decrypted)
+        log.info(f"Skriver ut på {LOCAL_PRINTER}: {len(decrypted)} bytes ({suffix})...")
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tf:
+            tf.write(decrypted)
+            tmp_path = tf.name
+        try:
+            cmd = build_lpr_cmd(LOCAL_PRINTER, job["copies"], job.get("options") or "{}")
+            cmd.append(tmp_path)
+            subprocess.run(cmd, check=True, capture_output=True)
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
 
         mark_retrieved(job_id)
         log.info(f"AUDIT print_ok upn={upn} job_id={job_id} title={job['title']!r} terminal={TERMINAL_ID}")
@@ -645,5 +676,8 @@ def api_logout():
 # Start
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
-    log.info(f"Startar terminal '{TERMINAL_ID}' – skrivare: {LOCAL_PRINTER}")
-    app.run(host="127.0.0.1", port=5000, debug=False)
+    # I produktion (kiosk) lyssnar vi bara på localhost.
+    # För container-demo: sätt FLASK_HOST=0.0.0.0
+    flask_host = os.environ.get("FLASK_HOST", "127.0.0.1")
+    log.info(f"Startar terminal '{TERMINAL_ID}' – skrivare: {LOCAL_PRINTER} – host: {flask_host}")
+    app.run(host=flask_host, port=5000, debug=False)

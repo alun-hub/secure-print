@@ -179,11 +179,20 @@ Terminal->>DB: status=retrieved
 Algorithm:   CMS (PKCS#7 / RFC 5652) enveloped-data
 Symmetric:   AES-256-CBC  (data encryption key)
 Asymmetric:  RSA or EC    (encrypts the AES key for the recipient)
-Tool:        openssl cms -encrypt -aes-256-cbc -recip <cert.pem>
 
-Decryption:  openssl cms -decrypt -engine pkcs11 -inkey pkcs11:type=private
-             The PKCS#11 engine performs RSA/EC unwrap inside the smartcard.
-             Plaintext data is written to a tmpfs tmpdir and never touches disk.
+Encryption:  openssl cms -encrypt -binary -aes-256-cbc -recip <cert.pem>
+             -binary is required to treat input as raw binary data (PDF/PS).
+             Without it, openssl applies MIME canonicalisation and silently
+             stops reading at MIME-special sequences inside the document.
+
+Decryption:  openssl cms -decrypt -binary \
+               -provider pkcs11 -provider default \
+               -inkey 'pkcs11:type=private;pin-source=file:<fifo>'
+             Uses the OpenSSL 3.x PKCS#11 provider (not the deprecated engine).
+             PIN is passed via a kernel FIFO — never written to disk.
+             Decrypted output is captured via stdout (never written to a file).
+             The PKCS#11 provider performs RSA/EC unwrap inside the smartcard;
+             the private key never enters host memory.
 ```
 
 ### Network exposure
@@ -302,7 +311,7 @@ ORDER  BY retrieved_at DESC;
    a. Parses argv[5] → options dict (copies stripped, handled separately)
    b. Reads job data from stdin (PDF / PostScript – no pre-processing)
    c. Looks up anna's X.509 certificate from AD/LDAP (userCertificate)
-   d. Encrypts: openssl cms -encrypt -aes-256-cbc -recip anna_cert.pem
+   d. Encrypts: openssl cms -encrypt -binary -aes-256-cbc -recip anna_cert.pem
    e. Uploads ciphertext to S3: jobs/anna.svensson@company.com/<uuid>.cms
    f. Inserts row in PostgreSQL:
       (id, user_upn, title, copies, options_json, s3_key, expires_at, 'pending')
@@ -338,9 +347,13 @@ ORDER  BY retrieved_at DESC;
 7. Flask backend for each job:
    a. Verifies job ownership in PostgreSQL (id + user_upn)
    b. Downloads ciphertext from S3
-   c. Decrypts via PKCS#11:
-        openssl cms -decrypt -engine pkcs11 -inkey pkcs11:type=private
-      Private key never leaves the card; RSA/EC unwrap runs inside hardware
+   c. Decrypts via PKCS#11 (OpenSSL 3.x provider):
+        openssl cms -decrypt -binary -provider pkcs11 -provider default \
+          -inkey 'pkcs11:type=private;pin-source=file:<fifo>'
+      PIN is passed via a FIFO — never on disk. Private key never leaves the
+      card; RSA/EC unwrap runs inside hardware. Decrypted data is captured
+      via stdout and written to a format-detected temp file (.pdf / .ps) so
+      that the local CUPS queue applies the correct filter chain.
    d. Sends plaintext to local printer, preserving original print settings:
         lpr -P <LOCAL_PRINTER> -# <copies>
             -o sides=<…> -o media=<…> -o print-color-mode=<…> …
@@ -603,6 +616,7 @@ printer's native format (PCL, ESC/P, native IPP, etc.) using the installed drive
 | `LOCAL_PRINTER` | CUPS printer name on this terminal (verify with `lpstat -p`) |
 | `TERMINAL_ID` | Unique identifier for this terminal; logged in `retrieved_by` |
 | `PKCS11_LIB` | Path to PKCS#11 shared library (auto-detected by `install.sh`) |
+| `REVOCATION_CHECK` | Certificate revocation mode: `ocsp` (default, with CRL fallback), `strict` (hard fail if status unknown), `none` (disabled — **not for production**) |
 
 **PKCS11_LIB paths by architecture:**
 
@@ -621,7 +635,7 @@ printer's native format (PCL, ESC/P, native IPP, etc.) using the installed drive
 - **Print options summary** — e.g. `Dubbelsidig · A4 · Svartvitt` derived from stored options
 - **Expiry warnings** — job cards highlighted orange (< 2 h) or red (< 1 h) with countdown
 - **Print all** — single button to release all pending jobs sequentially; per-card progress indicators
-- **Cancel with confirmation** — inline "Avboka jobbet? / Ja, avboka / Behåll" prevents accidental deletion
+- **Cancel with confirmation** — inline "Avbryt jobbet? / Ja, avbryt / Behåll" prevents accidental deletion
 - **Auto-refresh** — job list refreshed every 30 s while logged in (skipped during batch print or open confirm dialog)
 - **Title expansion** — tap/click a truncated job title to expand it in place
 - **Printer name** — shown in the user header so the user knows where to collect their documents

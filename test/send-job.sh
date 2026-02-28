@@ -6,10 +6,10 @@
 # =============================================================================
 set -euo pipefail
 
-CUPS_HOST="localhost"
-CUPS_PORT="631"
-QUEUE="s3-queue"
-UPN="testuser@company.com"
+CUPS_HOST="${CUPS_HOST:-localhost}"
+CUPS_PORT="${CUPS_PORT:-1631}"
+QUEUE="${QUEUE:-s3-queue}"
+UPN="${UPN:-alun@company.com}"
 
 log() { echo "▸ $*"; }
 ok()  { echo "  ✓ $*"; }

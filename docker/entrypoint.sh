@@ -96,12 +96,15 @@ done
 # -----------------------------------------------------------------------------
 if ! lpstat -p s3-queue 2>/dev/null | grep -q "s3-queue"; then
     log "Skapar utskriftskö 's3-queue'..."
+    # s3-policy är definierad i produktions-cupsd.conf men inte i testlägets config
+    POLICY_OPT=(-o printer-op-policy=s3-policy)
+    [ "${TEST_MODE:-0}" = "1" ] && POLICY_OPT=()
     lpadmin \
         -p s3-queue \
         -E \
         -v "s3print://" \
         -D "Säker krypterad utskriftskö" \
-        -o printer-op-policy=s3-policy \
+        "${POLICY_OPT[@]}" \
         -o printer-is-accepting-jobs=true
     log "Kön 's3-queue' skapad"
 else

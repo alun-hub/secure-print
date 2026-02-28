@@ -150,10 +150,14 @@ def encrypt_job(job_data: bytes, cert_der: bytes) -> bytes:
             capture_output=True,
         )
 
-        # Kryptera med hybridkryptering: AES-256-CBC för data, RSA/EC för nyckeln
+        # Kryptera med hybridkryptering: AES-256-CBC för data, RSA/EC för nyckeln.
+        # -binary krävs för att behandla indata som råbinär (PDF, PS, m.m.).
+        # Utan -binary gör openssl MIME-kanonisering och stannar vid MIME-strukturer
+        # i PDF-filer, vilket ger ett krypterat fragment i stället för hela filen.
         result = subprocess.run(
             [
                 "openssl", "cms", "-encrypt",
+                "-binary",
                 "-aes-256-cbc",
                 "-in",    str(job_file),
                 "-out",   str(encrypted_file),
