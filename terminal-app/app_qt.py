@@ -71,7 +71,7 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _SAFE_KEY   = re.compile(r'^[a-zA-Z0-9_\-]+$')
-_SAFE_VALUE = re.compile(r'^[a-zA-Z0-9_\-\./: ]+$')
+_SAFE_VALUE = re.compile(r'^[a-zA-Z0-9_\-\./: ,]+$')
 
 
 def build_lpr_cmd(printer: str, copies: int, options_json: str) -> list:
