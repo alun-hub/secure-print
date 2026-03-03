@@ -1,0 +1,965 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Secure Print – Teknisk presentation</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:       #0f0f1a;
+    --bg2:      #1a1a2e;
+    --bg3:      #232340;
+    --accent:   #4a90d9;
+    --accent2:  #6ab0f5;
+    --green:    #4caf7d;
+    --orange:   #f0a040;
+    --red:      #e05555;
+    --text:     #e0e0e0;
+    --muted:    #888;
+    --border:   #2d2d50;
+  }
+
+  html, body {
+    width: 100%; height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    overflow: hidden;
+  }
+
+  /* ── slide container ── */
+  #deck { width: 100%; height: 100%; position: relative; }
+
+  .slide {
+    position: absolute; inset: 0;
+    display: none;
+    flex-direction: column;
+    padding: 64px 80px 48px;
+    background: var(--bg2);
+  }
+  .slide.active { display: flex; }
+
+  /* title slide */
+  .slide.title { justify-content: center; align-items: center; text-align: center; background: var(--bg); }
+  .slide.title h1 { font-size: 3rem; font-weight: 700; color: var(--accent2); letter-spacing: -1px; margin-bottom: 16px; }
+  .slide.title .subtitle { font-size: 1.3rem; color: var(--muted); margin-bottom: 40px; }
+  .slide.title .tagline {
+    font-size: 1rem; color: var(--text);
+    background: var(--bg3); border: 1px solid var(--border);
+    padding: 12px 28px; border-radius: 6px;
+  }
+
+  /* headings */
+  h2 { font-size: 1.8rem; color: var(--accent2); margin-bottom: 32px; padding-bottom: 12px; border-bottom: 2px solid var(--border); }
+  h3 { font-size: 1.1rem; color: var(--accent); margin-bottom: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+
+  /* bullet lists */
+  ul { list-style: none; display: flex; flex-direction: column; gap: 12px; }
+  li { display: flex; align-items: flex-start; gap: 12px; font-size: 1.05rem; line-height: 1.5; }
+  li::before { content: '▸'; color: var(--accent); flex-shrink: 0; margin-top: 1px; }
+  li.check::before { content: '✓'; color: var(--green); }
+  li.warn::before  { content: '⚠'; color: var(--orange); }
+  li.bad::before   { content: '✗'; color: var(--red); }
+  li sub { font-size: .8em; color: var(--muted); }
+
+  /* two-column layout */
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; flex: 1; }
+  .cols3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 24px; flex: 1; }
+  .col { display: flex; flex-direction: column; }
+
+  /* card */
+  .card {
+    background: var(--bg3); border: 1px solid var(--border);
+    border-radius: 10px; padding: 20px 24px;
+  }
+  .card + .card { margin-top: 16px; }
+
+  /* code / monospace */
+  pre, code {
+    font-family: 'Cascadia Code', 'Consolas', monospace;
+    font-size: .88rem; background: #0d0d1a;
+    border: 1px solid var(--border); border-radius: 6px;
+  }
+  pre { padding: 16px 20px; overflow-x: auto; line-height: 1.6; }
+  code { padding: 2px 7px; }
+
+  /* badge / tag */
+  .badge {
+    display: inline-block; font-size: .72rem; font-weight: 700;
+    padding: 3px 10px; border-radius: 4px; letter-spacing: .05em;
+    text-transform: uppercase; vertical-align: middle;
+  }
+  .badge.blue   { background: #1a3f6f; color: #6ab0f5; }
+  .badge.green  { background: #1a3f2a; color: #4caf7d; }
+  .badge.orange { background: #3f2a0a; color: #f0a040; }
+  .badge.red    { background: #3f1010; color: #e05555; }
+
+  /* diagram boxes */
+  .flow {
+    display: flex; align-items: center; gap: 0; flex-wrap: nowrap;
+    font-family: monospace; font-size: .9rem;
+  }
+  .box {
+    background: var(--bg3); border: 1px solid var(--border);
+    border-radius: 8px; padding: 10px 16px; text-align: center;
+    line-height: 1.4; white-space: nowrap;
+  }
+  .box.accent { border-color: var(--accent); color: var(--accent2); }
+  .box.green  { border-color: var(--green);  color: var(--green);  }
+  .box.orange { border-color: var(--orange); color: var(--orange); }
+  .arr { color: var(--muted); padding: 0 8px; font-size: 1.1rem; }
+
+  /* table */
+  table { width: 100%; border-collapse: collapse; font-size: .95rem; }
+  th { text-align: left; padding: 8px 14px; background: var(--bg3); color: var(--accent2); border-bottom: 2px solid var(--border); }
+  td { padding: 8px 14px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+
+  /* progress bar */
+  .progress {
+    position: fixed; bottom: 0; left: 0; right: 0;
+    height: 3px; background: var(--bg3);
+  }
+  .progress-fill {
+    height: 100%; background: var(--accent);
+    transition: width .3s ease;
+  }
+
+  /* slide number */
+  .slide-num {
+    position: fixed; bottom: 14px; right: 24px;
+    font-size: .8rem; color: var(--muted);
+  }
+
+  /* nav hint */
+  .nav-hint {
+    position: fixed; bottom: 14px; left: 24px;
+    font-size: .75rem; color: var(--muted);
+  }
+
+  /* big stat */
+  .stat-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 20px; flex:1; }
+  .stat-card {
+    background: var(--bg3); border: 1px solid var(--border);
+    border-radius: 10px; padding: 24px; text-align: center;
+    display: flex; flex-direction: column; justify-content: center;
+  }
+  .stat-card .num { font-size: 2.6rem; font-weight: 700; color: var(--accent2); }
+  .stat-card .lbl { font-size: .9rem; color: var(--muted); margin-top: 6px; }
+
+  /* screen mockup */
+  .screen {
+    border: 2px solid var(--border); border-radius: 10px;
+    padding: 18px; background: #0d0d1a; font-size: .85rem;
+    font-family: monospace; flex: 1;
+  }
+  .screen .bar {
+    font-size: .7rem; color: var(--muted); margin-bottom: 10px;
+    padding-bottom: 8px; border-bottom: 1px solid var(--border);
+  }
+
+  /* slide-specific overrides */
+  .slide-section {
+    justify-content: center; align-items: center; text-align: center;
+    background: var(--bg);
+  }
+  .slide-section h2 {
+    font-size: 2.2rem; border: none; color: var(--accent2);
+    margin-bottom: 8px;
+  }
+  .slide-section p { color: var(--muted); font-size: 1rem; }
+</style>
+</head>
+<body>
+
+<div id="deck">
+
+<!-- ═══════════════════════════════════════ 1. TITLE ═══════════════════════════ -->
+<div class="slide title active">
+  <div style="margin-bottom:32px">
+    <svg width="80" height="80" viewBox="0 0 80 80" fill="none">
+      <rect width="80" height="80" rx="16" fill="#1a1a2e" stroke="#2d2d50" stroke-width="1.5"/>
+      <rect x="18" y="28" width="44" height="32" rx="4" stroke="#4a90d9" stroke-width="2"/>
+      <path d="M26 28v-6a14 14 0 0 1 28 0v6" stroke="#4a90d9" stroke-width="2" stroke-linecap="round"/>
+      <circle cx="40" cy="44" r="5" fill="#4a90d9"/>
+      <rect x="37" y="49" width="6" height="7" rx="2" fill="#4a90d9"/>
+    </svg>
+  </div>
+  <h1>Secure Print</h1>
+  <div class="subtitle">End-to-end krypterad säker utskrift med smartkortautentisering</div>
+  <div class="tagline">
+    Windows / Linux IPP Everywhere &nbsp;→&nbsp; CUPS + S3 + PostgreSQL &nbsp;→&nbsp; YubiKey &nbsp;→&nbsp; Skrivare
+  </div>
+  <div style="margin-top:48px; font-size:.85rem; color:var(--muted)">Teknisk systemöversikt · 2026</div>
+</div>
+
+<!-- ═══════════════════════════════════════ 2. PROBLEMET ══════════════════════ -->
+<div class="slide">
+  <h2>Problemet – traditionell nätverksutskrift</h2>
+  <div class="cols">
+    <div class="col">
+      <h3>Säkerhetsbrister</h3>
+      <ul>
+        <li class="bad">Utskriftsjobb skickas i klartext på nätverket</li>
+        <li class="bad">Jobben köar i klartext på skrivarens hårddisk</li>
+        <li class="bad">Vem som helst kan plocka upp ett utskrivet dokument</li>
+        <li class="bad">Inga krav på autentisering vid hämtning</li>
+        <li class="bad">Ingen spårbarhet – vem skrev ut vad och när?</li>
+      </ul>
+    </div>
+    <div class="col">
+      <h3>Krav på lösning</h3>
+      <ul>
+        <li class="check">Dokumentet krypterat hela vägen – aldrig i klartext på nätverket</li>
+        <li class="check">Bara rätt person kan dekryptera (privat nyckel på smartkort)</li>
+        <li class="check">Fysisk närvaro krävs – användaren måste vara vid skrivaren</li>
+        <li class="check">Fullständig auditlogg för compliance</li>
+        <li class="check">Driverless – fungerar direkt från Windows och Linux utan extra installation</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════ 3. ÖVERSIKT ══════════════════════ -->
+<div class="slide">
+  <h2>Systemöversikt</h2>
+  <div style="flex:1; display:flex; flex-direction:column; gap:20px; justify-content:center">
+    <div style="display:flex; justify-content:center">
+      <div class="flow" style="flex-wrap:wrap; gap:4px 0; justify-content:center">
+        <div class="box accent">Windows / Linux<br><small style="color:var(--muted)">IPP Everywhere</small></div>
+        <div class="arr">→</div>
+        <div class="box">CUPS<br><small style="color:var(--muted)">s3print-backend</small></div>
+        <div class="arr">→</div>
+        <div class="box orange">Kryptering<br><small style="color:var(--muted)">CMS / AES-256</small></div>
+        <div class="arr">→</div>
+        <div class="box">S3<br><small style="color:var(--muted)">.cms-filer</small></div>
+        <div class="arr">→</div>
+        <div class="box">PostgreSQL<br><small style="color:var(--muted)">jobbmetadata</small></div>
+      </div>
+    </div>
+    <div style="text-align:center; color:var(--muted); font-size:.9rem">↕ Nätverksgräns</div>
+    <div style="display:flex; justify-content:center">
+      <div class="flow" style="flex-wrap:wrap; gap:4px 0; justify-content:center">
+        <div class="box green">PyQt6-terminal<br><small style="color:var(--muted)">touch screen</small></div>
+        <div class="arr">←</div>
+        <div class="box">S3<br><small style="color:var(--muted)">hämtar .cms</small></div>
+        <div class="arr">—</div>
+        <div class="box accent">YubiKey<br><small style="color:var(--muted)">PKCS#11 / PIN</small></div>
+        <div class="arr">→</div>
+        <div class="box orange">Dekryptering<br><small style="color:var(--muted)">openssl cms</small></div>
+        <div class="arr">→</div>
+        <div class="box green">Skrivare<br><small style="color:var(--muted)">IPP / driverless</small></div>
+      </div>
+    </div>
+    <div style="display:flex; gap:12px; justify-content:center; margin-top:8px">
+      <span class="badge blue">Krypterat i vila</span>
+      <span class="badge blue">Krypterat i transit (TLS)</span>
+      <span class="badge green">Privat nyckel lämnar aldrig kortet</span>
+      <span class="badge orange">Inga öppna portar på terminalen</span>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════ 4. KOMPONENTER ═══════════════════ -->
+<div class="slide">
+  <h2>Komponenter</h2>
+  <div class="cols3" style="flex:1">
+    <div class="col" style="gap:12px">
+      <div class="card">
+        <h3>Klientdator</h3>
+        <ul style="gap:8px">
+          <li><strong>Windows 10/11</strong> – IPP Everywhere inbyggt, ingen driver</li>
+          <li><strong>Linux</strong> – CUPS / <code>lpr</code> / KDE/GNOME-dialoger, IPP-stöd inbyggt</li>
+          <li>Skrivare konfigureras via <code>ipps://cups-server/printers/s3-queue</code></li>
+          <li>TLS-krypterad transport till CUPS</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>CUPS</h3>
+        <ul style="gap:8px">
+          <li>Tar emot IPP-jobb från klienter via IPPS (443)</li>
+          <li>Kör custom backend: <code>s3print</code></li>
+          <li>Autentiserar klienter via Kerberos / SPNEGO</li>
+          <li><strong>Stateless</strong> – all state i PostgreSQL + S3</li>
+          <li>Kan köras som Deployment på Kubernetes</li>
+        </ul>
+      </div>
+    </div>
+    <div class="col" style="gap:12px">
+      <div class="card">
+        <h3>s3print-backend</h3>
+        <ul style="gap:8px">
+          <li>Python-script som CUPS anropar</li>
+          <li>Hämtar cert från LDAP/AD</li>
+          <li>Krypterar med <code>openssl cms</code></li>
+          <li>Laddar upp till S3</li>
+          <li>Registrerar metadata i PostgreSQL</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>Lagring</h3>
+        <ul style="gap:8px">
+          <li><strong>S3</strong> – krypterade jobfiler (.cms)</li>
+          <li><strong>PostgreSQL</strong> – jobbmetadata, status, UPN</li>
+          <li>Jobb raderas automatiskt efter 48 h</li>
+        </ul>
+      </div>
+    </div>
+    <div class="col" style="gap:12px">
+      <div class="card">
+        <h3>Utskriftsterminal</h3>
+        <ul style="gap:8px">
+          <li>Linux mini-PC + pekskärm</li>
+          <li>PyQt6 – native app, ingen browser</li>
+          <li>YubiKey via PKCS#11 (opensc)</li>
+          <li>Kopplar direkt till S3 och PostgreSQL</li>
+          <li>Inga lyssnande portar</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>Skrivare</h3>
+        <ul style="gap:8px">
+          <li>IPP Everywhere-kompatibel (PWG)</li>
+          <li>Terminal skriver ut via <code>lpr</code> lokalt</li>
+          <li>Alla IPP-alternativ bevaras</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════ 5. KRYPTERINGSFLÖDE ══════════════ -->
+<div class="slide">
+  <h2>Krypteringsflöde – end-to-end</h2>
+  <div class="cols">
+    <div class="col" style="gap:14px">
+      <h3>Vid utskrift (klientdator)</h3>
+      <div class="card">
+        <pre style="font-size:.8rem">1. Klienten (Windows/Linux) skickar PDF/PS
+   via IPP/TLS till CUPS s3-queue
+
+2. s3print-backend:
+   a. Hämtar användarens X.509-cert
+      från Active Directory (LDAP)
+   b. openssl cms -encrypt \
+        -aes-256-cbc \
+        -binary \
+        -recip user.pem
+   c. Laddar upp .cms-fil till S3
+   d. Skriver jobbpost i PostgreSQL
+      status = 'pending'</pre>
+      </div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap">
+        <span class="badge blue">Hybridkryptering</span>
+        <span class="badge blue">AES-256-CBC för data</span>
+        <span class="badge blue">RSA för sessionsnyckeln</span>
+      </div>
+    </div>
+    <div class="col" style="gap:14px">
+      <h3>Vid hämtning (terminal + YubiKey)</h3>
+      <div class="card">
+        <pre style="font-size:.8rem">3. Användaren sätter i YubiKey + PIN
+
+4. python-pkcs11: autentiserar mot
+   kortets privata nyckel,
+   extraherar UPN från SAN-fältet
+
+5. Hämtar .cms-fil från S3
+
+6. openssl cms -decrypt \
+     -binary \
+     -provider pkcs11
+   → privata nyckeln lämnar aldrig kortet
+
+7. Skriver ut dekrypterad fil med lpr
+
+8. Markerar jobbet 'retrieved' i DB</pre>
+      </div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap">
+        <span class="badge green">Privat nyckel på hårdvara</span>
+        <span class="badge green">PIN-skyddad</span>
+        <span class="badge orange">OCSP/CRL-kontroll</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════ 6. AUTENTISERING ═════════════════ -->
+<div class="slide">
+  <h2>Autentisering – Kerberos &amp; tjänstekonton</h2>
+  <div class="cols">
+    <div class="col" style="gap:14px">
+      <h3>Klient → CUPS via Kerberos</h3>
+      <div class="card" style="font-size:.85rem">
+        <pre style="font-size:.78rem">1. Klienten har ett Kerberos TGT från AD
+   (Windows: automatiskt · Linux: kinit)
+
+2. Klienten begär ett tjänstebiljett för
+   HTTP/cups-server@COMPANY.COM (SPN)
+
+3. IPP-anropet bär SPNEGO/Negotiate-header
+   med den krypterade Kerberos-biljetten
+
+4. CUPS validerar biljetten mot sin keytab
+   → extraherar autentiserat principal
+   → user@COMPANY.COM
+
+5. Principalnamnet skickas som argv[2]
+   (username) till s3print-backend
+
+6. s3print använder UPN för att slå upp
+   userCertificate i Active Directory</pre>
+      </div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap">
+        <span class="badge green">Ingen lösenordsinmatning på klienten</span>
+        <span class="badge blue">SSO med befintlig AD-inloggning</span>
+      </div>
+    </div>
+    <div class="col" style="gap:14px">
+      <h3>Tjänsteautentisering – alla flöden</h3>
+      <table style="font-size:.82rem">
+        <tr><th>Komponent</th><th>Mål</th><th>Metod</th><th>Lagring</th></tr>
+        <tr>
+          <td>CUPS / s3print</td><td>LDAP (AD)</td>
+          <td>Service account<br><code>LDAP_BIND_DN</code> + lösenord<br>LDAPS port 636</td>
+          <td>K8s Secret /<br>.env-fil</td>
+        </tr>
+        <tr>
+          <td>CUPS / s3print</td><td>S3</td>
+          <td>Access key + secret<br><code>S3_ACCESS_KEY</code><br>Signatur v4</td>
+          <td>K8s Secret /<br>.env-fil</td>
+        </tr>
+        <tr>
+          <td>CUPS / s3print</td><td>PostgreSQL</td>
+          <td>DB-credentials<br><code>DATABASE_URL</code><br>TLS-anslutning</td>
+          <td>K8s Secret /<br>.env-fil</td>
+        </tr>
+        <tr>
+          <td>Terminal</td><td>S3</td>
+          <td>Access key + secret<br>Samma S3-credentials</td>
+          <td><code>/etc/secure-print/terminal.env</code><br>root-läsbar</td>
+        </tr>
+        <tr>
+          <td>Terminal</td><td>PostgreSQL</td>
+          <td>DB-credentials<br><code>DATABASE_URL</code></td>
+          <td><code>/etc/secure-print/terminal.env</code><br>root-läsbar</td>
+        </tr>
+      </table>
+      <div class="card" style="font-size:.83rem; margin-top:0">
+        Terminalen behöver <em>inte</em> LDAP – UPN hämtas från smartkortets SAN-fält
+        via PKCS#11. Certifikatvalidering sker lokalt + OCSP/CRL mot CA.
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════ 7. TERMINAL-APP ══════════════════ -->
+<div class="slide">
+  <h2>Terminal-appen – PyQt6</h2>
+  <div class="cols">
+    <div class="col" style="gap:16px">
+      <h3>Arkitektur</h3>
+      <ul>
+        <li>Native Qt6-app – ingen webbserver, inga öppna portar</li>
+        <li>QStackedWidget med tre skärmar</li>
+        <li>QThread-workers för all I/O (aldrig blockerar UI)</li>
+        <li>ActivityFilter – inaktivitetstimer 5 min</li>
+        <li>CardMonitorThread – pollar smartkort var 1 s</li>
+      </ul>
+      <h3 style="margin-top:8px">Skärmar</h3>
+      <div class="card" style="font-size:.9rem">
+        <div style="display:flex; gap:10px; align-items:center; margin-bottom:8px">
+          <span class="badge orange">WaitScreen</span>
+          <span>Väntar på smartkort</span>
+        </div>
+        <div style="display:flex; gap:10px; align-items:center; margin-bottom:8px">
+          <span class="badge blue">PINScreen</span>
+          <span>3×4 knappsats + fysiskt tangentbord</span>
+        </div>
+        <div style="display:flex; gap:10px; align-items:center">
+          <span class="badge green">JobsScreen</span>
+          <span>Jobblista med bulk-val, skriv ut / avbryt</span>
+        </div>
+      </div>
+    </div>
+    <div class="col" style="gap:14px">
+      <h3>QThread-workers</h3>
+      <table style="font-size:.85rem">
+        <tr><th>Worker</th><th>Uppgift</th></tr>
+        <tr><td><code>CardMonitorThread</code></td><td>Detekterar isättning / borttagning</td></tr>
+        <tr><td><code>LoginWorker</code></td><td>PIN-autentisering mot PKCS#11</td></tr>
+        <tr><td><code>JobLoaderWorker</code></td><td>Hämtar väntande jobb från PostgreSQL</td></tr>
+        <tr><td><code>PrintWorker</code></td><td>S3-hämtning → dekryptering → lpr</td></tr>
+        <tr><td><code>CancelWorker</code></td><td>Markerar jobb som avbrutna i DB</td></tr>
+      </table>
+      <div class="card" style="font-size:.85rem; margin-top:4px">
+        <strong>Sessionstillstånd</strong> – UPN, certifikat, PIN lagras <em>enbart i RAM</em>.<br>
+        Rensas vid utloggning, kortborttagning eller inaktivitetstimeout.
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════ 8. SKÄRMBILDER ═══════════════════ -->
+<div class="slide" style="padding: 40px 56px 32px;">
+  <h2 style="margin-bottom:20px">Terminalens tre skärmar</h2>
+  <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:28px; flex:1;">
+
+    <!-- ── WaitScreen ── -->
+    <div style="display:flex; flex-direction:column; gap:10px;">
+      <div style="font-size:.8rem; color:var(--accent); font-weight:700; text-transform:uppercase; letter-spacing:.06em;">1 · Väntar på kort</div>
+      <div style="flex:1; background:#1a1a2e; border-radius:12px; border:1px solid #2d2d50; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:24px; padding:32px 20px; min-height:0;">
+        <div style="font-size:72pt; line-height:1; user-select:none;">💳</div>
+        <div style="font-size:18pt; font-weight:bold; color:#e0e0e0; text-align:center;">Sätt i smartkort</div>
+        <div style="font-size:11pt; color:#888; text-align:center; line-height:1.6;">
+          Terminal: terminal-01<br>
+          Skrivare: ET-2810_Series
+        </div>
+      </div>
+    </div>
+
+    <!-- ── PINScreen ── -->
+    <div style="display:flex; flex-direction:column; gap:10px;">
+      <div style="font-size:.8rem; color:var(--accent); font-weight:700; text-transform:uppercase; letter-spacing:.06em;">2 · PIN-inmatning</div>
+      <div style="flex:1; background:#1a1a2e; border-radius:12px; border:1px solid #2d2d50; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:16px; padding:28px 20px; min-height:0;">
+        <div style="font-size:18pt; font-weight:bold; color:#e0e0e0;">Ange PIN-kod</div>
+        <!-- dots row -->
+        <div style="font-size:22pt; letter-spacing:10px; color:#e0e0e0; min-height:1.4em; text-align:center;">● ● ● ●</div>
+        <!-- keypad -->
+        <div style="display:grid; grid-template-columns:repeat(3,72px); grid-template-rows:repeat(4,60px); gap:8px;">
+          <!-- row 1 -->
+          <div style="background:#2d2d44;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:16pt;color:#e0e0e0;">1</div>
+          <div style="background:#2d2d44;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:16pt;color:#e0e0e0;">2</div>
+          <div style="background:#2d2d44;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:16pt;color:#e0e0e0;">3</div>
+          <!-- row 2 -->
+          <div style="background:#2d2d44;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:16pt;color:#e0e0e0;">4</div>
+          <div style="background:#2d2d44;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:16pt;color:#e0e0e0;">5</div>
+          <div style="background:#2d2d44;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:16pt;color:#e0e0e0;">6</div>
+          <!-- row 3 -->
+          <div style="background:#2d2d44;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:16pt;color:#e0e0e0;">7</div>
+          <div style="background:#2d2d44;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:16pt;color:#e0e0e0;">8</div>
+          <div style="background:#2d2d44;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:16pt;color:#e0e0e0;">9</div>
+          <!-- row 4 -->
+          <div style="background:transparent;border:1px solid #888;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:16pt;color:#e0e0e0;">⌫</div>
+          <div style="background:#2d2d44;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:16pt;color:#e0e0e0;">0</div>
+          <div style="background:#4a90d9;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:13pt;font-weight:bold;color:white;">OK</div>
+        </div>
+        <!-- error placeholder -->
+        <div style="font-size:11pt; color:#ff6b6b; min-height:1.4em; text-align:center;"></div>
+      </div>
+    </div>
+
+    <!-- ── JobsScreen ── -->
+    <div style="display:flex; flex-direction:column; gap:10px;">
+      <div style="font-size:.8rem; color:var(--accent); font-weight:700; text-transform:uppercase; letter-spacing:.06em;">3 · Utskriftsjobb</div>
+      <div style="flex:1; background:#1a1a2e; border-radius:12px; border:1px solid #2d2d50; display:flex; flex-direction:column; padding:14px 14px 10px; gap:8px; overflow:hidden; min-height:0;">
+
+        <!-- header row -->
+        <div style="display:flex; align-items:center; gap:8px; flex-shrink:0;">
+          <span style="font-size:11pt; color:#e0e0e0;">alun@company.com</span>
+          <span style="font-size:10pt; color:#888;">· ET-2810</span>
+          <div style="flex:1;"></div>
+          <div style="background:#2d2d44;border-radius:6px;padding:4px 10px;font-size:10pt;color:#e0e0e0;">Uppdatera</div>
+          <div style="background:transparent;border:1px solid #888;border-radius:6px;padding:4px 10px;font-size:10pt;color:#e0e0e0;">Logga ut</div>
+        </div>
+
+        <!-- bulk action bar -->
+        <div style="display:flex; align-items:center; gap:6px; flex-shrink:0;">
+          <div style="background:#2d2d44;border-radius:6px;padding:4px 10px;font-size:9.5pt;color:#e0e0e0;">Markera alla</div>
+          <div style="background:#4a90d9;border-radius:6px;padding:4px 10px;font-size:9.5pt;color:white;font-weight:bold;">Skriv ut valda (2)</div>
+          <div style="background:transparent;border:1px solid #888;border-radius:6px;padding:4px 10px;font-size:9.5pt;color:#e0e0e0;">Ta bort valda (2)</div>
+        </div>
+
+        <!-- job card 1 (checked) -->
+        <div style="background:#2d2d44; border-radius:8px; padding:10px 12px; flex-shrink:0;">
+          <div style="display:flex; align-items:flex-start; gap:10px;">
+            <div style="width:20px;height:20px;border-radius:4px;background:#4a90d9;flex-shrink:0;margin-top:2px;display:flex;align-items:center;justify-content:center;">
+              <div style="width:10px;height:6px;border-left:2px solid white;border-bottom:2px solid white;transform:rotate(-45deg);margin-top:-3px;"></div>
+            </div>
+            <div style="flex:1; min-width:0;">
+              <div style="font-size:12pt;font-weight:bold;color:#e0e0e0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Prisjustering Q1 2026.pdf</div>
+              <div style="font-size:9pt;color:#aaa;margin-top:3px;">Dubbelsidig · A4 · 284 KB · 09:14</div>
+              <div style="display:flex;gap:6px;margin-top:8px;">
+                <div style="background:#4a90d9;border-radius:5px;padding:3px 10px;font-size:9.5pt;color:white;font-weight:bold;">Skriv ut</div>
+                <div style="background:transparent;border:1px solid #888;border-radius:5px;padding:3px 10px;font-size:9.5pt;color:#e0e0e0;">Avbryt</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- job card 2 (checked) -->
+        <div style="background:#2d2d44; border-radius:8px; padding:10px 12px; flex-shrink:0;">
+          <div style="display:flex; align-items:flex-start; gap:10px;">
+            <div style="width:20px;height:20px;border-radius:4px;background:#4a90d9;flex-shrink:0;margin-top:2px;display:flex;align-items:center;justify-content:center;">
+              <div style="width:10px;height:6px;border-left:2px solid white;border-bottom:2px solid white;transform:rotate(-45deg);margin-top:-3px;"></div>
+            </div>
+            <div style="flex:1; min-width:0;">
+              <div style="font-size:12pt;font-weight:bold;color:#e0e0e0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Sekretessavtal_v3.pdf</div>
+              <div style="font-size:9pt;color:#aaa;margin-top:3px;">A4 · Svartvitt · 118 KB · 09:22</div>
+              <div style="display:flex;gap:6px;margin-top:8px;">
+                <div style="background:#4a90d9;border-radius:5px;padding:3px 10px;font-size:9.5pt;color:white;font-weight:bold;">Skriv ut</div>
+                <div style="background:transparent;border:1px solid #888;border-radius:5px;padding:3px 10px;font-size:9.5pt;color:#e0e0e0;">Avbryt</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- job card 3 (unchecked) -->
+        <div style="background:#2d2d44; border-radius:8px; padding:10px 12px; flex-shrink:0;">
+          <div style="display:flex; align-items:flex-start; gap:10px;">
+            <div style="width:20px;height:20px;border-radius:4px;border:2px solid #666;flex-shrink:0;margin-top:2px;"></div>
+            <div style="flex:1; min-width:0;">
+              <div style="font-size:12pt;font-weight:bold;color:#e0e0e0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Budgetrapport_2026.xlsx</div>
+              <div style="font-size:9pt;color:#aaa;margin-top:3px;">2 kopior · A4 · 67 KB · 09:31</div>
+              <div style="display:flex;gap:6px;margin-top:8px;">
+                <div style="background:#4a90d9;border-radius:5px;padding:3px 10px;font-size:9.5pt;color:white;font-weight:bold;">Skriv ut</div>
+                <div style="background:transparent;border:1px solid #888;border-radius:5px;padding:3px 10px;font-size:9.5pt;color:#e0e0e0;">Avbryt</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════ 9. IPP EVERYWHERE ════════════════ -->
+<div class="slide">
+  <h2>IPP Everywhere – drivrutinsfritt</h2>
+  <div class="cols">
+    <div class="col" style="gap:14px">
+      <h3>Hur det fungerar</h3>
+      <ul>
+        <li>Standardiserat av PWG (Printer Working Group) – RFC 8011</li>
+        <li>Windows / Linux skickar PDF direkt – inga konverteringssteg</li>
+        <li>CUPS s3-queue använder custom backend – ingen PPD, ingen filterkjedja</li>
+        <li>Alla IPP-alternativ lagras verbatim i databasen och spelas upp vid utskrift</li>
+      </ul>
+      <h3 style="margin-top:8px">Inga drivrutiner behövs</h3>
+      <ul>
+        <li class="check">Inte på klientdatorn (Windows eller Linux)</li>
+        <li class="check">Inte på terminalen</li>
+        <li class="check">Terminalen skriver ut direkt via lokal <code>lpr</code></li>
+      </ul>
+    </div>
+    <div class="col" style="gap:14px">
+      <h3>Kapabiliteter – ett viktigt designval</h3>
+      <div class="card" style="font-size:.88rem; border-color:var(--orange)">
+        <strong style="color:var(--orange)">⚠ Klienten pratar med s3-queue, inte med den fysiska skrivaren</strong><br><br>
+        <code>get-printer-attributes</code> returnerar s3-queue:ns generiska kapabiliteter —
+        inte den fysiska skrivarens. Klientens utskriftsdialog visar alltså ett
+        <em>generiskt</em> alternativset (duplex, A4, färg/mono m.m.) snarare än
+        skrivarspecifika alternativ (specifika pappersfack, häftpositioner osv.).<br><br>
+        <strong>Hur det hanteras:</strong> s3-queue konfigureras i CUPS med breda
+        generiska attribut. Alla IPP-alternativ användaren väljer lagras verbatim
+        som JSON i PostgreSQL. Vid utskrift på terminalen spelas de upp som
+        <code>lpr -o key=value</code> mot den lokala skrivaren, som avgör
+        om den stöder varje alternativ.
+      </div>
+      <div class="card" style="font-size:.85rem">
+        <strong>Bevarade alternativ (exempel)</strong><br>
+        <code>media</code> · <code>sides</code> · <code>print-color-mode</code> ·
+        <code>print-quality</code> · <code>number-up</code> · <code>finishings</code> ·
+        <code>page-ranges</code> · <code>orientation-requested</code>
+      </div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap">
+        <span class="badge green">Skrivar&shy;agnostisk kö</span>
+        <span class="badge blue">Samma kö – flera terminaler</span>
+        <span class="badge orange">Generisk print-dialog</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════ 9. KUBERNETES ════════════════════ -->
+<div class="slide">
+  <h2>Kubernetes – stateless CUPS-driftsättning</h2>
+  <div class="cols">
+    <div class="col" style="gap:14px">
+      <h3>Varför stateless fungerar</h3>
+      <ul>
+        <li>CUPS-containern håller <em>inget</em> eget jobbstate – allt lagras i PostgreSQL och S3</li>
+        <li>Varje s3print-anrop är atomärt: läs från LDAP → kryptera → skriv S3 → skriv DB</li>
+        <li>Flera CUPS-pods kan köra parallellt utan delad disk eller delat minne</li>
+        <li>En pods krasch innebär max ett tappt jobb (CUPS-retries hanterar det)</li>
+      </ul>
+      <div class="card" style="font-size:.85rem; margin-top:4px">
+        <strong>Vad som <em>inte</em> är stateless:</strong> PostgreSQL och S3 är
+        externa tjänster med eget HA-upplägg (RDS Multi-AZ, S3-replikering m.m.) —
+        de hanteras utanför Kubernetes-klustret.
+      </div>
+    </div>
+    <div class="col" style="gap:14px">
+      <h3>Kubernetes-resurser</h3>
+      <pre style="font-size:.78rem">apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cups-s3print
+spec:
+  replicas: 3          # horisontell skalning
+  template:
+    spec:
+      containers:
+      - name: cups
+        image: secure-print/cups:latest
+        envFrom:
+        - secretRef:
+            name: s3print-secrets  # LDAP, S3, DB-creds
+        ports:
+        - containerPort: 631       # IPPS via Ingress → 443</pre>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:4px">
+        <span class="badge green">Horisontell skalning</span>
+        <span class="badge green">Rolling updates</span>
+        <span class="badge blue">Secrets via K8s Secret</span>
+        <span class="badge blue">Keytab via K8s Secret volume</span>
+        <span class="badge orange">Ingress → TLS-terminering</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════ 10. SÄKERHETSMODELL ══════════════ -->
+<div class="slide">
+  <h2>Säkerhetsmodell</h2>
+  <div class="cols">
+    <div class="col" style="gap:12px">
+      <h3>Skyddade tillgångar</h3>
+      <table style="font-size:.88rem">
+        <tr><th>Tillgång</th><th>Skydd</th></tr>
+        <tr><td>Dokumentinnehåll i S3</td><td>AES-256-CBC, CMS/PKCS#7</td></tr>
+        <tr><td>Transport klient → CUPS</td><td>TLS (IPPS port 443)</td></tr>
+        <tr><td>Transport terminal → S3/DB</td><td>TLS</td></tr>
+        <tr><td>Privat nyckel</td><td>YubiKey – lämnar aldrig hårdvaran</td></tr>
+        <tr><td>PIN-kod</td><td>Lagras aldrig, enbart i RAM under session</td></tr>
+        <tr><td>Sessionstillstånd</td><td>Enbart i RAM, rensas vid utloggning</td></tr>
+      </table>
+      <h3 style="margin-top:4px">Autentiseringsfaktorer</h3>
+      <ul style="gap:8px">
+        <li><strong>Något du har</strong> – fysiskt smartkort (YubiKey)</li>
+        <li><strong>Något du vet</strong> – PIN-kod</li>
+        <li><strong>Något du är</strong> – certifikat bundet till din UPN i AD</li>
+      </ul>
+    </div>
+    <div class="col" style="gap:12px">
+      <h3>Hotmitigering</h3>
+      <table style="font-size:.88rem">
+        <tr><th>Hot</th><th>Mitigering</th></tr>
+        <tr><td>Avlyssning på nätverket</td><td>TLS + krypterade .cms-filer</td></tr>
+        <tr><td>Obehörig åtkomst till S3</td><td>Filen oläslig utan privat nyckel</td></tr>
+        <tr><td>Stöld av smartkort</td><td>PIN-skydd, OCSP/CRL-revokation</td></tr>
+        <tr><td>Sessionshijacking</td><td>Ingen session på nätverket</td></tr>
+        <tr><td>XSS / webbattacker</td><td>Eliminerat – native PyQt6, ingen browser</td></tr>
+        <tr><td>Öppna portar på terminalen</td><td>Inga lyssnande tjänster</td></tr>
+        <tr><td>Inaktiv session</td><td>Auto-utloggning efter 5 min</td></tr>
+        <tr><td>Glömt kort i läsare</td><td>Kort borttaget → direkt utloggning</td></tr>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════ 9. AUDITLOGG ═════════════════════ -->
+<div class="slide">
+  <h2>Auditlogg &amp; Compliance</h2>
+  <div class="cols">
+    <div class="col" style="gap:16px">
+      <h3>Händelser som loggas</h3>
+      <table style="font-size:.88rem">
+        <tr><th>Händelse</th><th>Fält</th></tr>
+        <tr><td><code>job_submitted</code></td><td>upn, job_id, title, copies, size</td></tr>
+        <tr><td><code>login_ok</code></td><td>upn, terminal_id</td></tr>
+        <tr><td><code>login_fail</code></td><td>terminal_id, reason</td></tr>
+        <tr><td><code>print_ok</code></td><td>upn, job_id, title, terminal_id</td></tr>
+        <tr><td><code>print_fail</code></td><td>upn, job_id, reason</td></tr>
+        <tr><td><code>cancel</code></td><td>upn, job_id, terminal_id</td></tr>
+        <tr><td><code>logout</code></td><td>upn, terminal_id</td></tr>
+      </table>
+      <div class="card" style="font-size:.85rem">
+        Loggformat: <code>AUDIT event=X upn=Y terminal=Z ...</code><br>
+        Kan skickas till SIEM (Splunk, ELK, Graylog) via syslog.
+      </div>
+    </div>
+    <div class="col" style="gap:16px">
+      <h3>Jobblivscykel i PostgreSQL</h3>
+      <div class="flow" style="flex-direction:column; align-items:flex-start; gap:8px">
+        <div style="display:flex; align-items:center; gap:10px">
+          <div class="box accent" style="width:130px">pending</div>
+          <span style="color:var(--muted); font-size:.85rem">Jobb krypterat och uppladdats</span>
+        </div>
+        <div style="color:var(--muted); padding-left:65px">↓</div>
+        <div style="display:flex; align-items:center; gap:10px">
+          <div class="box green" style="width:130px">retrieved</div>
+          <span style="color:var(--muted); font-size:.85rem">Skrivet ut på terminal</span>
+        </div>
+        <div style="color:var(--muted); padding-left:65px">↓ &nbsp; eller &nbsp; ↓</div>
+        <div style="display:flex; align-items:center; gap:10px">
+          <div class="box orange" style="width:130px">cancelled</div>
+          <span style="color:var(--muted); font-size:.85rem">Avbrutet av användaren</span>
+        </div>
+        <div style="color:var(--muted); padding-left:65px">↓</div>
+        <div style="display:flex; align-items:center; gap:10px">
+          <div class="box" style="width:130px; color:var(--red); border-color:var(--red)">raderat</div>
+          <span style="color:var(--muted); font-size:.85rem">Automatiskt efter 48 h (TTL)</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════ 10. DRIFTSÄTTNING ════════════════ -->
+<div class="slide">
+  <h2>Driftsättning</h2>
+  <div class="cols3" style="flex:1">
+    <div class="col" style="gap:12px">
+      <div class="card">
+        <h3>Serversida</h3>
+        <pre style="font-size:.76rem; margin-top:8px"># Lokal / Docker Compose (dev/test)
+docker compose up -d
+# cups + s3print, postgres, S3-kompatibel
+
+# Produktion – Kubernetes
+kubectl apply -f k8s/
+# Deployment: cups (replicas: N)
+# Secrets: LDAP, S3, DB, Kerberos keytab
+# Ingress: IPPS port 443 → TLS</pre>
+        <ul style="margin-top:10px; gap:6px; font-size:.83rem">
+          <li>Credentials via K8s Secrets (ej i image)</li>
+          <li>LDAP/AD-integration i produktion</li>
+          <li>Cert-JSON-testläge för lokal dev</li>
+        </ul>
+      </div>
+    </div>
+    <div class="col" style="gap:12px">
+      <div class="card">
+        <h3>Terminal (Linux)</h3>
+        <pre style="font-size:.78rem; margin-top:10px">install.sh
+# Installerar:
+# python3-pyqt6
+# opensc, pcscd
+# python-pkcs11, boto3,
+# psycopg2
+
+systemctl enable \
+  secure-print-terminal
+systemctl start \
+  secure-print-terminal</pre>
+      </div>
+    </div>
+    <div class="col" style="gap:12px">
+      <div class="card">
+        <h3>Klientdator</h3>
+        <ul style="gap:8px; font-size:.88rem; margin-top:4px">
+          <li><strong>Windows:</strong> Lägg till skrivare via<br><code>ipps://cups-server/printers/s3-queue</code><br>
+              IPP Everywhere installeras automatiskt · GPO-distribuerbar</li>
+          <li><strong>Linux:</strong> <code>lpadmin -p s3-queue -E -v ipps://cups-server/printers/s3-queue</code><br>
+              eller via GNOME / KDE utskriftsinställningar</li>
+          <li>Inga drivrutiner att distribuera på någon plattform</li>
+        </ul>
+      </div>
+      <div class="card" style="margin-top:0">
+        <h3>Krav</h3>
+        <ul style="gap:6px; font-size:.88rem">
+          <li>Active Directory med <code>userCertificate</code></li>
+          <li>Smartkort utfärdade av intern CA</li>
+          <li>OCSP/CRL-tjänst (valfritt i test)</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════ 11. SAMMANFATTNING ═══════════════ -->
+<div class="slide">
+  <h2>Sammanfattning</h2>
+  <div style="flex:1; display:flex; flex-direction:column; gap:20px">
+    <div class="stat-grid">
+      <div class="stat-card">
+        <div class="num">E2E</div>
+        <div class="lbl">Kryptering hela vägen<br>från klient till skrivare</div>
+      </div>
+      <div class="stat-card">
+        <div class="num">0</div>
+        <div class="lbl">Öppna portar<br>på utskriftsterminalen</div>
+      </div>
+      <div class="stat-card">
+        <div class="num">2FA</div>
+        <div class="lbl">Smartkort + PIN<br>krävs för hämtning</div>
+      </div>
+    </div>
+    <div class="cols" style="flex:0">
+      <div class="col">
+        <h3>Nyckeldesignbeslut</h3>
+        <ul style="gap:8px; font-size:.92rem">
+          <li>Privat nyckel lämnar aldrig YubiKey (PKCS#11 on-card crypto)</li>
+          <li>Native PyQt6 – ingen webbserver, ingen browser-attackyta</li>
+          <li>Stateless CUPS – körbart på Kubernetes, horisontellt skalbart</li>
+          <li>Stateless terminal – all state i S3 + PostgreSQL</li>
+          <li>Kerberos SSO – klienten autentiseras med befintlig AD-inloggning</li>
+          <li>IPP Everywhere – noll klientinstallation på Windows och Linux</li>
+        </ul>
+      </div>
+      <div class="col">
+        <h3>Teknisk stack</h3>
+        <div style="display:flex; gap:8px; flex-wrap:wrap">
+          <span class="badge blue">Python 3</span>
+          <span class="badge blue">PyQt6</span>
+          <span class="badge blue">CUPS</span>
+          <span class="badge blue">OpenSSL CMS</span>
+          <span class="badge blue">PKCS#11</span>
+          <span class="badge blue">YubiKey</span>
+          <span class="badge blue">S3</span>
+          <span class="badge blue">PostgreSQL</span>
+          <span class="badge blue">LDAP / AD</span>
+          <span class="badge blue">Kerberos / SPNEGO</span>
+          <span class="badge blue">IPP Everywhere</span>
+          <span class="badge blue">Kubernetes</span>
+          <span class="badge blue">Docker</span>
+          <span class="badge blue">systemd</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+</div><!-- #deck -->
+
+<!-- Progress + nav -->
+<div class="progress"><div class="progress-fill" id="prog"></div></div>
+<div class="slide-num" id="num"></div>
+<div class="nav-hint">← → navigera &nbsp;|&nbsp; F fullskärm</div>
+
+<script>
+  const slides = document.querySelectorAll('.slide');
+  let cur = 0;
+
+  function show(n) {
+    slides[cur].classList.remove('active');
+    cur = Math.max(0, Math.min(n, slides.length - 1));
+    slides[cur].classList.add('active');
+    document.getElementById('prog').style.width = ((cur+1)/slides.length*100) + '%';
+    document.getElementById('num').textContent = (cur+1) + ' / ' + slides.length;
+  }
+
+  document.addEventListener('keydown', e => {
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown' || e.key === ' ') show(cur+1);
+    if (e.key === 'ArrowLeft'  || e.key === 'ArrowUp')  show(cur-1);
+    if (e.key === 'f' || e.key === 'F') document.documentElement.requestFullscreen?.();
+    if (e.key === 'Home') show(0);
+    if (e.key === 'End')  show(slides.length-1);
+  });
+
+  // touch swipe
+  let tx = 0;
+  document.addEventListener('touchstart', e => tx = e.touches[0].clientX);
+  document.addEventListener('touchend',   e => {
+    const dx = tx - e.changedTouches[0].clientX;
+    if (Math.abs(dx) > 40) dx > 0 ? show(cur+1) : show(cur-1);
+  });
+
+  show(0);
+</script>
+</body>
+</html>
