@@ -388,7 +388,7 @@
    a. Hämtar användarens X.509-cert
       från Active Directory (LDAP)
    b. openssl cms -encrypt \
-        -aes-256-cbc \
+        -aes-256-gcm \
         -binary \
         -recip user.pem
    c. Laddar upp .cms-fil till S3
@@ -397,7 +397,7 @@
       </div>
       <div style="display:flex; gap:8px; flex-wrap:wrap">
         <span class="badge blue">Hybridkryptering</span>
-        <span class="badge blue">AES-256-CBC för data</span>
+        <span class="badge blue">AES-256-GCM (AEAD)</span>
         <span class="badge blue">RSA för sessionsnyckeln</span>
       </div>
     </div>
@@ -774,7 +774,7 @@ spec:
       <h3>Skyddade tillgångar</h3>
       <table style="font-size:.88rem">
         <tr><th>Tillgång</th><th>Skydd</th></tr>
-        <tr><td>Dokumentinnehåll i S3</td><td>AES-256-CBC, CMS/PKCS#7</td></tr>
+        <tr><td>Dokumentinnehåll i S3</td><td>AES-256-GCM, CMS/PKCS#7 (AEAD)</td></tr>
         <tr><td>Transport klient → CUPS</td><td>TLS (IPPS port 443)</td></tr>
         <tr><td>Transport terminal → S3/DB</td><td>TLS</td></tr>
         <tr><td>Privat nyckel</td><td>YubiKey – lämnar aldrig hårdvaran</td></tr>

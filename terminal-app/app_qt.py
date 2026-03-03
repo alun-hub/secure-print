@@ -561,6 +561,13 @@ class PrintWorker(QThread):
                     pass
 
             mark_retrieved(job["id"])
+            # Radera S3-objektet direkt efter lyckad hämtning – den krypterade
+            # jobbfilen behövs inte längre och bör inte ligga kvar i bucketen.
+            try:
+                _s3().delete_object(Bucket=S3_BUCKET, Key=job["s3_key"])
+                log.info(f"S3 raderat: {job['s3_key']}")
+            except Exception as exc:
+                log.warning(f"S3-radering misslyckades för {job['s3_key']}: {exc}")
             log.info(f"AUDIT print_ok job_id={job['id']} title={job['title']!r} terminal={TERMINAL_ID}")
             self.success.emit(job["title"])
 

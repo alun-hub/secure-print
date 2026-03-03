@@ -28,14 +28,14 @@ by the intended recipient using their PIN-protected smartcard.
 │  │                                             │ │
 │  │  1. Read job from stdin (PS/PDF)            │ │
 │  │  2. Fetch user cert from AD/LDAP            │ │
-│  │  3. Encrypt: openssl cms -aes-256-cbc       │ │
+│  │  3. Encrypt: openssl cms -aes-256-gcm       │ │
 │  │  4. Upload ciphertext → S3                  │ │
 │  │  5. Insert metadata → PostgreSQL            │ │
 │  │  6. Exit 0  (CUPS spool stays empty)        │ │
 │  └──────────────────────��──────────────────────┘ │
 └────────────┬─────────────────────────────────────┘
              │
-             ├──────── AES-256-CBC (CMS envelope) ────────────┐
+             ├──────── AES-256-GCM (CMS envelope) ────────────┐
              │                                                 │
              ▼                                                 ▼
   ┌─────────────────────┐                       ┌─────────────────────────┐
@@ -228,7 +228,7 @@ PC->>CUPS: IPPS (TLS) + Kerberos
 CUPS->>s3print: Job + options
 
 s3print->>AD: Fetch certificate
-s3print->>s3print: Encrypt (CMS AES-256-CBC)
+s3print->>s3print: Encrypt (CMS AES-256-GCM)
 s3print->>S3: Upload ciphertext
 s3print->>DB: Insert metadata
 
@@ -242,6 +242,7 @@ Terminal->>Card: Decrypt
 Card-->>Terminal: Plaintext
 Terminal->>Printer: Print
 Terminal->>DB: status=retrieved
+Terminal->>S3: Delete ciphertext
 ```
 
 ---
@@ -258,6 +259,7 @@ Terminal->>DB: status=retrieved
 | Private key extraction | PKCS#11 decryption runs inside the smartcard; the key never enters host memory |
 | Forgotten job left in queue | Configurable retention (default 48 h); hourly CronJob marks expired rows and deletes S3 objects |
 | Cancelled job data lingering in S3 | Cancelled jobs are also purged by the hourly CronJob (same expiry logic) |
+| Retrieved job ciphertext lingering in S3 | Terminal deletes the S3 object immediately after a successful print; no residual ciphertext remains at rest |
 | Stolen smartcard | PIN required; repeated wrong PINs lock the card |
 | Session left open at terminal | Client-side inactivity timer (5 min) auto-logs out; card removal immediately clears session |
 | Command injection via print options | Option keys and values validated with strict regex before passing to `lpr`; subprocess list (not shell) prevents injection regardless |
@@ -268,10 +270,13 @@ Terminal->>DB: status=retrieved
 
 ```
 Algorithm:   CMS (PKCS#7 / RFC 5652) enveloped-data
-Symmetric:   AES-256-CBC  (data encryption key)
+Symmetric:   AES-256-GCM  (data encryption key, AEAD — RFC 5084)
+             GCM provides both confidentiality and integrity (authentication
+             tag). Any tampering of the ciphertext in S3 is detected at
+             decrypt time.
 Asymmetric:  RSA or EC    (encrypts the AES key for the recipient)
 
-Encryption:  openssl cms -encrypt -binary -aes-256-cbc -recip <cert.pem>
+Encryption:  openssl cms -encrypt -binary -aes-256-gcm -recip <cert.pem>
              -binary is required to treat input as raw binary data (PDF/PS).
              Without it, openssl applies MIME canonicalisation and silently
              stops reading at MIME-special sequences inside the document.
@@ -402,7 +407,7 @@ ORDER  BY retrieved_at DESC;
    a. Parses argv[5] → options dict (copies stripped, handled separately)
    b. Reads job data from stdin (PDF / PostScript – no pre-processing)
    c. Looks up anna's X.509 certificate from AD/LDAP (userCertificate)
-   d. Encrypts: openssl cms -encrypt -binary -aes-256-cbc -recip anna_cert.pem
+   d. Encrypts: openssl cms -encrypt -binary -aes-256-gcm -recip anna_cert.pem
    e. Uploads ciphertext to S3: jobs/anna.svensson@company.com/<uuid>.cms
    f. Inserts row in PostgreSQL:
       (id, user_upn, title, copies, options_json, s3_key, expires_at, 'pending')
@@ -450,7 +455,8 @@ ORDER  BY retrieved_at DESC;
         lpr -P <LOCAL_PRINTER> -# <copies>
             -o sides=<…> -o media=<…> -o print-color-mode=<…> …
    d. Marks row as status='retrieved', sets retrieved_at and retrieved_by
-   e. Job list reloads automatically when all pending workers complete
+   e. Deletes the ciphertext from S3 immediately (no residual data at rest)
+   f. Job list reloads automatically when all pending workers complete
 
 8. User removes card → CardMonitorThread emits card_removed →
    session variables wiped from memory, WaitScreen shown immediately

@@ -14,22 +14,20 @@ Secure Print är ett välstrukturerat proof-of-concept med en tydlig säkerhetsf
 
 ## 1. Säkerhet
 
-### 1.1 Unauthenticated kryptering (KRITISK)
+### 1.1 Unauthenticated kryptering (KRITISK) — ✅ Åtgärdat
 
 **Fil:** `docker/s3print` rad 157–168
 **Problem:** Kryptering sker med `openssl cms -encrypt -aes-256-cbc`. CBC-läge ger **konfidentialitet men inte integritet**. Det finns ingen MAC eller autentiseringstagг. En angripare med skrivbehörighet till S3-bucketen kan manipulera det krypterade jobbinnehållet (padding oracle, bitflip-attack) utan att det syns vid dekryptering.
-**Rekommendation:** Byt till AES-256-GCM (AEAD) eller lägg till ett HMAC-SHA256 av den krypterade filen, signerat med en tjänstnyckel. Alternativt: använd `openssl cms -encrypt` med `-aes-256-gcm` om det stöds av OpenSSL-versionen, eller byt till ett explicit GCM-flöde via `cryptography`-biblioteket utan subprocess.
+**Åtgärd:** Bytt till `-aes-256-gcm` (RFC 5084 AES-GCM i CMS). GCM är AEAD och ger integritetsskydd via en autentiseringstagg — manipulering av krypterade S3-objekt detekteras vid dekryptering. `openssl cms -decrypt` läser algoritmen automatiskt ur CMS-envelopen, ingen ändring i terminalen krävs.
 
 ---
 
-### 1.2 PIN sparas i Python-sträng utan minnessanering (HÖG)
+### 1.2 PIN sparas i Python-sträng utan minnessanering (HÖG) — ✅ Åtgärdat
 
 **Fil:** `terminal-app/app_qt.py` rad 482 (`LoginWorker.__init__`), 1162–1163 (`MainWindow._login_ok`)
-**Problem:** PIN-koden lagras i `self._pin` som en Python-sträng. Python-strängar är immutabla och kan inte nollsättas; objektet lever i minnet tills garbage collectorn väljer att frigöra det. Ännu allvarligare: `self._pin` i `MainWindow` rensas inte explicit vid utloggning – `_logout()` sätter `self._upn = self._cert_pem = ""` men **inte** `self._pin = ""`.
-**Konsekvens:** PIN-koden kan förbli i processminnets heap efter utloggning, synlig i en core dump eller minnesdump.
-**Rekommendation:**
-1. Nollsätt `self._pin = ""` i `_logout()` och `_on_card_removed()`.
-2. På längre sikt: använd `bytearray` i stället för `str` för PIN, och skriv explicita nollor (`pin_buf[:] = b'\x00' * len(pin_buf)`) efter användning. Python garanterar fortfarande inget om intern minnesåtervinning, men det är bättre praxis.
+**Problem:** PIN-koden lagras i `self._pin` som en Python-sträng. Python-strängar är immutabla och kan inte nollsättas; objektet lever i minnet tills garbage collectorn väljer att frigöra det.
+**Åtgärd:** `_logout()` nollsätter redan `self._pin = ""` (rad 1140) — detta var åtgärdat i ett tidigare commit ("Fix missing login_fail audit log and logout-with-card-present bug"). `_on_card_removed()` anropar `_logout()` vilket täcker även det fallet.
+**Kvarstående begränsning:** Python-strängar kan inte gardera minnesinnehållet; för fullständig minnessanering krävs `bytearray` med explicit nollskrivning — detta lämnas som förbättringsarbete (fas 2).
 
 ---
 
@@ -120,13 +118,12 @@ SystemCallFilter=@system-service
 
 ## 2. Funktioner
 
-### 2.1 Inga S3-objekt rensas efter hämtning
+### 2.1 Inga S3-objekt rensas efter hämtning — ✅ Delvis åtgärdat
 
 **Fil:** `terminal-app/app_qt.py` rad 563; `sql/schema.sql` rad 47–56
-**Problem:** `mark_retrieved()` markerar jobbet som `retrieved` i databasen men tar **inte** bort S3-objektet. Den krypterade jobbfilen ligger kvar i S3 tills `expire_old_jobs()` anropas – men den funktionen returnerar bara nycklar att rensa och anropas inte automatiskt av någon CronJob, systemd-timer eller liknande. I praktiken ackumuleras krypterade jobb i S3 utan rensning.
-**Rekommendation:**
-1. Ta bort S3-objektet direkt i `PrintWorker.run()` efter lyckad utskrift.
-2. Implementera ett K8s CronJob (eller systemd-timer) som kör `expire_old_jobs()` och sedan raderar de returnerade S3-nycklarna.
+**Problem:** `mark_retrieved()` markerade jobbet som `retrieved` i databasen men tog **inte** bort S3-objektet.
+**Åtgärd:** `PrintWorker.run()` raderar nu S3-objektet direkt efter lyckad utskrift via `_s3().delete_object()`. Misslyckad radering loggas som varning men avbryter inte flödet (jobbet är redan utskrivet).
+**Kvarstående:** Jobb som aldrig hämtas (pending/cancelled) rensas fortfarande av `expire_old_jobs()` — men den funktionen anropas inte av någon automatiserad process ännu. K8s CronJob kvarstår som fas 1-åtgärd.
 
 ---
 
@@ -310,14 +307,14 @@ def stop(self):
 
 ### Fas 0 – Omedelbart (före eventuell pilotdrift)
 
-| # | Åtgärd | Fil | Allvarlighetsgrad |
-|---|--------|-----|-------------------|
-| 0.1 | Byt `aes-256-cbc` till AES-256-GCM eller lägg till HMAC | `docker/s3print` | KRITISK |
-| 0.2 | Nollsätt `self._pin` i `_logout()` och `_on_card_removed()` | `terminal-app/app_qt.py` | HÖG |
-| 0.3 | Byt standardvärde för `REVOCATION_CHECK` till `strict` i prod, dokumentera tydligt | `terminal-app/app_qt.py`, `terminal-app/install.sh` | HÖG |
-| 0.4 | Bunta CA-certifikat, ta bort `-noverify`-grenen | `terminal-app/app_qt.py` | HÖG |
-| 0.5 | Rensa S3-objektet i `PrintWorker` efter lyckad utskrift | `terminal-app/app_qt.py` | HÖG |
-| 0.6 | Flytta testlösenord till gitignorerad `.env`-fil | `docker-compose.yml` | MEDEL |
+| # | Åtgärd | Fil | Allvarlighetsgrad | Status |
+|---|--------|-----|-------------------|--------|
+| 0.1 | Byt `aes-256-cbc` till AES-256-GCM | `docker/s3print` | KRITISK | ✅ Åtgärdat |
+| 0.2 | Nollsätt `self._pin` i `_logout()` och `_on_card_removed()` | `terminal-app/app_qt.py` | HÖG | ✅ Åtgärdat (var redan klart) |
+| 0.3 | Byt standardvärde för `REVOCATION_CHECK` till `strict` i prod, dokumentera tydligt | `terminal-app/app_qt.py`, `terminal-app/install.sh` | HÖG | Ej åtgärdat |
+| 0.4 | Bunta CA-certifikat, ta bort `-noverify`-grenen | `terminal-app/app_qt.py` | HÖG | Ej åtgärdat |
+| 0.5 | Rensa S3-objektet i `PrintWorker` efter lyckad utskrift | `terminal-app/app_qt.py` | HÖG | ✅ Åtgärdat |
+| 0.6 | Flytta testlösenord till gitignorerad `.env`-fil | `docker-compose.yml` | MEDEL | Ej åtgärdat |
 
 ### Fas 1 – Innan bredddrift (0–3 månader)
 
