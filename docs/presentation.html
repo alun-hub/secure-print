@@ -36,59 +36,59 @@
     position: absolute; inset: 0;
     display: none;
     flex-direction: column;
-    padding: 32px 56px 24px;
+    padding: 20px 48px 14px;
     background: var(--bg2);
   }
   .slide.active { display: flex; }
 
   /* title slide */
   .slide.title { justify-content: center; align-items: center; text-align: center; background: var(--bg); }
-  .slide.title h1 { font-size: 3.2rem; font-weight: 700; color: var(--accent2); letter-spacing: -1px; margin-bottom: 12px; }
-  .slide.title .subtitle { font-size: 1.3rem; color: var(--muted); margin-bottom: 28px; }
+  .slide.title h1 { font-size: 3.6rem; font-weight: 700; color: var(--accent2); letter-spacing: -1px; margin-bottom: 14px; }
+  .slide.title .subtitle { font-size: 1.5rem; color: var(--muted); margin-bottom: 32px; }
   .slide.title .tagline {
-    font-size: 1rem; color: var(--text);
+    font-size: 1.15rem; color: var(--text);
     background: var(--bg3); border: 1px solid var(--border);
-    padding: 10px 28px; border-radius: 6px;
+    padding: 12px 32px; border-radius: 6px;
   }
 
   /* headings */
-  h2 { font-size: 2rem; color: var(--accent2); margin-bottom: 14px; padding-bottom: 10px; border-bottom: 2px solid var(--border); }
-  h3 { font-size: 1.15rem; color: var(--accent); margin-bottom: 8px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+  h2 { font-size: 2.2rem; color: var(--accent2); margin-bottom: 12px; padding-bottom: 8px; border-bottom: 2px solid var(--border); }
+  h3 { font-size: 1.25rem; color: var(--accent); margin-bottom: 8px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
 
   /* bullet lists */
-  ul { list-style: none; display: flex; flex-direction: column; gap: 9px; }
-  li { display: flex; align-items: flex-start; gap: 10px; font-size: 1.1rem; line-height: 1.45; }
-  li::before { content: '▸'; color: var(--accent); flex-shrink: 0; margin-top: 2px; }
+  ul { list-style: none; display: flex; flex-direction: column; gap: 10px; }
+  li { display: flex; align-items: flex-start; gap: 12px; font-size: 1.2rem; line-height: 1.45; }
+  li::before { content: '▸'; color: var(--accent); flex-shrink: 0; margin-top: 3px; }
   li.check::before { content: '✓'; color: var(--green); }
   li.warn::before  { content: '⚠'; color: var(--orange); }
   li.bad::before   { content: '✗'; color: var(--red); }
   li sub { font-size: .8em; color: var(--muted); }
 
   /* two-column layout */
-  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; flex: 1; }
-  .cols3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 18px; flex: 1; }
-  .col { display: flex; flex-direction: column; }
+  .cols  { display: grid; grid-template-columns: 1fr 1fr;       gap: 28px; flex: 1; min-height: 0; }
+  .cols3 { display: grid; grid-template-columns: 1fr 1fr 1fr;   gap: 20px; flex: 1; min-height: 0; }
+  .col   { display: flex; flex-direction: column; min-height: 0; }
 
   /* card */
   .card {
     background: var(--bg3); border: 1px solid var(--border);
-    border-radius: 8px; padding: 16px 20px;
+    border-radius: 8px; padding: 18px 22px;
   }
-  .card + .card { margin-top: 10px; }
+  .card + .card { margin-top: 12px; }
 
   /* code / monospace */
   pre, code {
     font-family: 'Cascadia Code', 'Consolas', monospace;
-    font-size: .9rem; background: #0d0d1a;
+    font-size: .97rem; background: #0d0d1a;
     border: 1px solid var(--border); border-radius: 6px;
   }
   pre { padding: 12px 16px; overflow-x: auto; line-height: 1.55; }
-  code { padding: 2px 6px; }
+  code { padding: 2px 7px; }
 
   /* badge / tag */
   .badge {
-    display: inline-block; font-size: .72rem; font-weight: 700;
-    padding: 3px 10px; border-radius: 4px; letter-spacing: .05em;
+    display: inline-block; font-size: .82rem; font-weight: 700;
+    padding: 4px 12px; border-radius: 4px; letter-spacing: .05em;
     text-transform: uppercase; vertical-align: middle;
   }
   .badge.blue   { background: #1a3f6f; color: #6ab0f5; }
@@ -99,22 +99,22 @@
   /* diagram boxes */
   .flow {
     display: flex; align-items: center; gap: 0; flex-wrap: nowrap;
-    font-family: monospace; font-size: .9rem;
+    font-family: monospace; font-size: 1rem;
   }
   .box {
     background: var(--bg3); border: 1px solid var(--border);
-    border-radius: 8px; padding: 10px 16px; text-align: center;
+    border-radius: 8px; padding: 12px 18px; text-align: center;
     line-height: 1.4; white-space: nowrap;
   }
   .box.accent { border-color: var(--accent); color: var(--accent2); }
   .box.green  { border-color: var(--green);  color: var(--green);  }
   .box.orange { border-color: var(--orange); color: var(--orange); }
-  .arr { color: var(--muted); padding: 0 8px; font-size: 1.1rem; }
+  .arr { color: var(--muted); padding: 0 10px; font-size: 1.4rem; }
 
   /* table */
-  table { width: 100%; border-collapse: collapse; font-size: .97rem; }
-  th { text-align: left; padding: 7px 14px; background: var(--bg3); color: var(--accent2); border-bottom: 2px solid var(--border); }
-  td { padding: 7px 14px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  table { width: 100%; border-collapse: collapse; font-size: 1.05rem; }
+  th { text-align: left; padding: 9px 14px; background: var(--bg3); color: var(--accent2); border-bottom: 2px solid var(--border); }
+  td { padding: 9px 14px; border-bottom: 1px solid var(--border); vertical-align: top; }
   tr:last-child td { border-bottom: none; }
 
   /* progress bar */
@@ -129,25 +129,25 @@
 
   /* slide number */
   .slide-num {
-    position: fixed; bottom: 14px; right: 24px;
-    font-size: .8rem; color: var(--muted);
+    position: fixed; bottom: 10px; right: 20px;
+    font-size: .85rem; color: var(--muted);
   }
 
   /* nav hint */
   .nav-hint {
-    position: fixed; bottom: 14px; left: 24px;
-    font-size: .75rem; color: var(--muted);
+    position: fixed; bottom: 10px; left: 20px;
+    font-size: .8rem; color: var(--muted);
   }
 
   /* big stat */
-  .stat-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 14px; flex:1; max-height: 180px; }
+  .stat-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 16px; flex: 1; min-height: 0; max-height: 220px; }
   .stat-card {
     background: var(--bg3); border: 1px solid var(--border);
-    border-radius: 8px; padding: 16px; text-align: center;
+    border-radius: 8px; padding: 20px; text-align: center;
     display: flex; flex-direction: column; justify-content: center;
   }
-  .stat-card .num { font-size: 2.2rem; font-weight: 700; color: var(--accent2); }
-  .stat-card .lbl { font-size: .85rem; color: var(--muted); margin-top: 4px; }
+  .stat-card .num { font-size: 2.6rem; font-weight: 700; color: var(--accent2); }
+  .stat-card .lbl { font-size: .95rem; color: var(--muted); margin-top: 6px; }
 
   /* screen mockup */
   .screen {
@@ -201,22 +201,22 @@
   <div class="cols">
     <div class="col">
       <h3>Säkerhetsbrister</h3>
-      <ul>
-        <li class="bad">Utskriftsjobb skickas i klartext på nätverket</li>
-        <li class="bad">Jobben köar i klartext på skrivarens hårddisk</li>
-        <li class="bad">Vem som helst kan plocka upp ett utskrivet dokument</li>
-        <li class="bad">Inga krav på autentisering vid hämtning</li>
-        <li class="bad">Ingen spårbarhet – vem skrev ut vad och när?</li>
+      <ul style="gap:16px">
+        <li class="bad" style="font-size:1.4rem">Utskriftsjobb skickas i klartext på nätverket</li>
+        <li class="bad" style="font-size:1.4rem">Jobben köar i klartext på skrivarens hårddisk</li>
+        <li class="bad" style="font-size:1.4rem">Vem som helst kan plocka upp ett utskrivet dokument</li>
+        <li class="bad" style="font-size:1.4rem">Inga krav på autentisering vid hämtning</li>
+        <li class="bad" style="font-size:1.4rem">Ingen spårbarhet – vem skrev ut vad och när?</li>
       </ul>
     </div>
     <div class="col">
       <h3>Krav på lösning</h3>
-      <ul>
-        <li class="check">Dokumentet krypterat hela vägen – aldrig i klartext på nätverket</li>
-        <li class="check">Bara rätt person kan dekryptera (privat nyckel på smartkort)</li>
-        <li class="check">Fysisk närvaro krävs – användaren måste vara vid skrivaren</li>
-        <li class="check">Fullständig auditlogg för compliance</li>
-        <li class="check">Driverless – fungerar direkt från Windows och Linux utan extra installation</li>
+      <ul style="gap:16px">
+        <li class="check" style="font-size:1.4rem">Dokumentet krypterat hela vägen – aldrig i klartext på nätverket</li>
+        <li class="check" style="font-size:1.4rem">Bara rätt person kan dekryptera (privat nyckel på smartkort)</li>
+        <li class="check" style="font-size:1.4rem">Fysisk närvaro krävs – användaren måste vara vid skrivaren</li>
+        <li class="check" style="font-size:1.4rem">Fullständig auditlogg för compliance</li>
+        <li class="check" style="font-size:1.4rem">Driverless – fungerar direkt från Windows och Linux utan extra installation</li>
       </ul>
     </div>
   </div>
@@ -381,7 +381,7 @@
     <div class="col" style="gap:14px">
       <h3>Vid utskrift (klientdator)</h3>
       <div class="card">
-        <pre style="font-size:.8rem">1. Klienten (Windows/Linux) skickar PDF/PS
+        <pre style="font-size:1rem">1. Klienten (Windows/Linux) skickar PDF/PS
    via IPP/TLS till CUPS s3-queue
 
 2. s3print-backend:
@@ -404,7 +404,7 @@
     <div class="col" style="gap:14px">
       <h3>Vid hämtning (terminal + YubiKey)</h3>
       <div class="card">
-        <pre style="font-size:.8rem">3. Användaren sätter i YubiKey + PIN
+        <pre style="font-size:1rem">3. Användaren sätter i YubiKey + PIN
 
 4. python-pkcs11: autentiserar mot
    kortets privata nyckel,
@@ -436,8 +436,8 @@
   <div class="cols">
     <div class="col" style="gap:14px">
       <h3>Klient → CUPS via Kerberos</h3>
-      <div class="card" style="font-size:.85rem">
-        <pre style="font-size:.78rem">1. Klienten har ett Kerberos TGT från AD
+      <div class="card" style="font-size:1rem">
+        <pre style="font-size:.97rem">1. Klienten har ett Kerberos TGT från AD
    (Windows: automatiskt · Linux: kinit)
 
 2. Klienten begär ett tjänstebiljett för
@@ -463,7 +463,7 @@
     </div>
     <div class="col" style="gap:14px">
       <h3>Tjänsteautentisering – alla flöden</h3>
-      <table style="font-size:.82rem">
+      <table style="font-size:1rem">
         <tr><th>Komponent</th><th>Mål</th><th>Metod</th><th>Lagring</th></tr>
         <tr>
           <td>CUPS / s3print</td><td>LDAP (AD)</td>
@@ -491,7 +491,7 @@
           <td><code>/etc/secure-print/terminal.env</code><br>root-läsbar</td>
         </tr>
       </table>
-      <div class="card" style="font-size:.83rem; margin-top:0">
+      <div class="card" style="font-size:1.05rem; margin-top:0">
         Terminalen behöver <em>inte</em> LDAP – UPN hämtas från smartkortets SAN-fält
         via PKCS#11. Certifikatvalidering sker lokalt + OCSP/CRL mot CA.
       </div>
@@ -547,7 +547,7 @@
 </div>
 
 <!-- ═══════════════════════════════════════ 8. SKÄRMBILDER ═══════════════════ -->
-<div class="slide" style="padding: 32px 56px 20px;">
+<div class="slide" style="padding: 20px 48px 14px;">
   <h2 style="margin-bottom:12px">Terminalens tre skärmar</h2>
   <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:28px; flex:1;">
 
@@ -692,7 +692,7 @@
     </div>
     <div class="col" style="gap:14px">
       <h3>Kapabiliteter – ett viktigt designval</h3>
-      <div class="card" style="font-size:.88rem; border-color:var(--orange)">
+      <div class="card" style="font-size:1.05rem; border-color:var(--orange)">
         <strong style="color:var(--orange)">⚠ Klienten pratar med s3-queue, inte med den fysiska skrivaren</strong><br><br>
         <code>get-printer-attributes</code> returnerar s3-queue:ns generiska kapabiliteter —
         inte den fysiska skrivarens. Klientens utskriftsdialog visar alltså ett
@@ -704,7 +704,7 @@
         <code>lpr -o key=value</code> mot den lokala skrivaren, som avgör
         om den stöder varje alternativ.
       </div>
-      <div class="card" style="font-size:.85rem">
+      <div class="card" style="font-size:1.05rem">
         <strong>Bevarade alternativ (exempel)</strong><br>
         <code>media</code> · <code>sides</code> · <code>print-color-mode</code> ·
         <code>print-quality</code> · <code>number-up</code> · <code>finishings</code> ·
@@ -860,7 +860,7 @@ spec:
     <div class="col" style="gap:12px">
       <div class="card">
         <h3>Serversida</h3>
-        <pre style="font-size:.76rem; margin-top:8px"># Lokal / Docker Compose (dev/test)
+        <pre style="font-size:.93rem; margin-top:8px"># Lokal / Docker Compose (dev/test)
 docker compose up -d
 # cups + s3print, postgres, S3-kompatibel
 
@@ -869,7 +869,7 @@ kubectl apply -f k8s/
 # Deployment: cups (replicas: N)
 # Secrets: LDAP, S3, DB, Kerberos keytab
 # Ingress: IPPS port 443 → TLS</pre>
-        <ul style="margin-top:10px; gap:6px; font-size:.83rem">
+        <ul style="margin-top:10px; gap:8px; font-size:1.05rem">
           <li>Credentials via K8s Secrets (ej i image)</li>
           <li>LDAP/AD-integration i produktion</li>
           <li>Cert-JSON-testläge för lokal dev</li>
@@ -879,7 +879,7 @@ kubectl apply -f k8s/
     <div class="col" style="gap:12px">
       <div class="card">
         <h3>Terminal (Linux)</h3>
-        <pre style="font-size:.78rem; margin-top:10px">install.sh
+        <pre style="font-size:.93rem; margin-top:10px">install.sh
 # Installerar:
 # python3-pyqt6
 # opensc, pcscd
@@ -895,17 +895,17 @@ systemctl start \
     <div class="col" style="gap:12px">
       <div class="card">
         <h3>Klientdator</h3>
-        <ul style="gap:8px; font-size:.88rem; margin-top:4px">
+        <ul style="gap:10px; font-size:1.05rem; margin-top:4px">
           <li><strong>Windows:</strong> Lägg till skrivare via<br><code>ipps://cups-server/printers/s3-queue</code><br>
               IPP Everywhere installeras automatiskt · GPO-distribuerbar</li>
-          <li><strong>Linux:</strong> <code>lpadmin -p s3-queue -E -v ipps://cups-server/printers/s3-queue</code><br>
+          <li><strong>Linux:</strong> <code>lpadmin -p s3-queue -E -v ipps://...</code><br>
               eller via GNOME / KDE utskriftsinställningar</li>
           <li>Inga drivrutiner att distribuera på någon plattform</li>
         </ul>
       </div>
       <div class="card" style="margin-top:0">
         <h3>Krav</h3>
-        <ul style="gap:6px; font-size:.88rem">
+        <ul style="gap:8px; font-size:1.05rem">
           <li>Active Directory med <code>userCertificate</code></li>
           <li>Smartkort utfärdade av intern CA</li>
           <li>OCSP/CRL-tjänst (valfritt i test)</li>
